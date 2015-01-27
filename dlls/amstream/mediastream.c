@@ -26,6 +26,10 @@
 #include "windef.h"
 #include "winbase.h"
 #include "wingdi.h"
+#include "dshow.h"
+#include "qedit.h"
+
+#include "wine/strmbase.h"
 
 #include "amstream_private.h"
 
@@ -39,14 +43,98 @@ static HRESULT ddrawstreamsample_create(IDirectDrawMediaStream *parent, IDirectD
 static HRESULT audiostreamsample_create(IAudioMediaStream *parent, IAudioData *audio_data, IAudioStreamSample **audio_stream_sample);
 
 typedef struct {
+    BaseInputPin pin;
     IAMMediaStream IAMMediaStream_iface;
     IDirectDrawMediaStream IDirectDrawMediaStream_iface;
-    LONG ref;
     IMultiMediaStream* parent;
     MSPID purpose_id;
     STREAM_TYPE stream_type;
     IDirectDraw7 *ddraw;
+    CRITICAL_SECTION critical_section;
 } DirectDrawMediaStreamImpl;
+
+static inline DirectDrawMediaStreamImpl *impl_from_DirectDrawMediaStream_IPin(IPin *iface)
+{
+    return CONTAINING_RECORD(iface, DirectDrawMediaStreamImpl, pin.pin.IPin_iface);
+}
+
+/*** IUnknown methods ***/
+static HRESULT WINAPI DirectDrawMediaStreamImpl_IPin_QueryInterface(IPin *iface, REFIID riid, void **ret_iface)
+{
+    DirectDrawMediaStreamImpl *This = impl_from_DirectDrawMediaStream_IPin(iface);
+
+    TRACE("(%p/%p)->(%s,%p)\n", iface, This, debugstr_guid(riid), ret_iface);
+
+    if (IsEqualGUID(riid, &IID_IUnknown) ||
+        IsEqualGUID(riid, &IID_IPin))
+    {
+        IPin_AddRef(iface);
+        *ret_iface = iface;
+        return S_OK;
+    }
+    else if (IsEqualGUID(riid, &IID_IMemInputPin))
+    {
+        IPin_AddRef(iface);
+        *ret_iface = &This->pin.IMemInputPin_iface;
+        return S_OK;
+    }
+    else if (IsEqualGUID(riid, &IID_IMediaStream) ||
+        IsEqualGUID(riid, &IID_IAMMediaStream))
+    {
+        IPin_AddRef(iface);
+        *ret_iface = &This->IAMMediaStream_iface;
+        return S_OK;
+    }
+    else if (IsEqualGUID(riid, &IID_IDirectDrawMediaStream))
+    {
+        IPin_AddRef(iface);
+        *ret_iface = &This->IDirectDrawMediaStream_iface;
+        return S_OK;
+    }
+
+    ERR("(%p)->(%s,%p),not found\n", This, debugstr_guid(riid), ret_iface);
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI DirectDrawMediaStreamImpl_IPin_Release(IPin *iface)
+{
+    DirectDrawMediaStreamImpl *This = impl_from_DirectDrawMediaStream_IPin(iface);
+    ULONG ref = InterlockedDecrement(&This->pin.pin.refCount);
+
+    TRACE("(%p/%p)->(): new ref = %u\n", iface, This, ref);
+
+    if (!ref)
+    {
+        if (This->ddraw)
+            IDirectDraw7_Release(This->ddraw);
+        DeleteCriticalSection(&This->critical_section);
+        BaseInputPin_Destroy(&This->pin);
+    }
+
+    return ref;
+}
+
+static const IPinVtbl DirectDrawMediaStreamImpl_IPin_Vtbl =
+{
+    DirectDrawMediaStreamImpl_IPin_QueryInterface,
+    BasePinImpl_AddRef,
+    DirectDrawMediaStreamImpl_IPin_Release,
+    BaseInputPinImpl_Connect,
+    BaseInputPinImpl_ReceiveConnection,
+    BasePinImpl_Disconnect,
+    BasePinImpl_ConnectedTo,
+    BasePinImpl_ConnectionMediaType,
+    BasePinImpl_QueryPinInfo,
+    BasePinImpl_QueryDirection,
+    BasePinImpl_QueryId,
+    BasePinImpl_QueryAccept,
+    BasePinImpl_EnumMediaTypes,
+    BasePinImpl_QueryInternalConnections,
+    BaseInputPinImpl_EndOfStream,
+    BaseInputPinImpl_BeginFlush,
+    BaseInputPinImpl_EndFlush,
+    BasePinImpl_NewSegment,
+};
 
 static inline DirectDrawMediaStreamImpl *impl_from_DirectDrawMediaStream_IAMMediaStream(IAMMediaStream *iface)
 {
@@ -59,52 +147,21 @@ static HRESULT WINAPI DirectDrawMediaStreamImpl_IAMMediaStream_QueryInterface(IA
 {
     DirectDrawMediaStreamImpl *This = impl_from_DirectDrawMediaStream_IAMMediaStream(iface);
 
-    TRACE("(%p/%p)->(%s,%p)\n", iface, This, debugstr_guid(riid), ret_iface);
-
-    if (IsEqualGUID(riid, &IID_IUnknown) ||
-        IsEqualGUID(riid, &IID_IMediaStream) ||
-        IsEqualGUID(riid, &IID_IAMMediaStream))
-    {
-        IAMMediaStream_AddRef(iface);
-        *ret_iface = iface;
-        return S_OK;
-    }
-    else if (IsEqualGUID(riid, &IID_IDirectDrawMediaStream))
-    {
-        IAMMediaStream_AddRef(iface);
-        *ret_iface = &This->IDirectDrawMediaStream_iface;
-        return S_OK;
-    }
-
-    ERR("(%p)->(%s,%p),not found\n", This, debugstr_guid(riid), ret_iface);
-    return E_NOINTERFACE;
+    return IPin_QueryInterface(&This->pin.pin.IPin_iface, riid, ret_iface);
 }
 
 static ULONG WINAPI DirectDrawMediaStreamImpl_IAMMediaStream_AddRef(IAMMediaStream *iface)
 {
     DirectDrawMediaStreamImpl *This = impl_from_DirectDrawMediaStream_IAMMediaStream(iface);
-    ULONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p/%p)->(): new ref = %u\n", iface, This, ref);
-
-    return ref;
+    return IPin_AddRef(&This->pin.pin.IPin_iface);
 }
 
 static ULONG WINAPI DirectDrawMediaStreamImpl_IAMMediaStream_Release(IAMMediaStream *iface)
 {
     DirectDrawMediaStreamImpl *This = impl_from_DirectDrawMediaStream_IAMMediaStream(iface);
-    ULONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p/%p)->(): new ref = %u\n", iface, This, ref);
-
-    if (!ref)
-    {
-        if (This->ddraw)
-            IDirectDraw7_Release(This->ddraw);
-        HeapFree(GetProcessHeap(), 0, This);
-    }
-
-    return ref;
+    return IPin_Release(&This->pin.pin.IPin_iface);
 }
 
 /*** IMediaStream methods ***/
@@ -211,9 +268,11 @@ static HRESULT WINAPI DirectDrawMediaStreamImpl_IAMMediaStream_JoinFilter(IAMMed
 {
     DirectDrawMediaStreamImpl *This = impl_from_DirectDrawMediaStream_IAMMediaStream(iface);
 
-    FIXME("(%p/%p)->(%p) stub!\n", This, iface, media_stream_filter);
+    TRACE("(%p/%p)->(%p)\n", This, iface, media_stream_filter);
 
-    return S_FALSE;
+    This->pin.pin.pinInfo.pFilter = (IBaseFilter *)media_stream_filter;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI DirectDrawMediaStreamImpl_IAMMediaStream_JoinFilterGraph(IAMMediaStream *iface, IFilterGraph *filtergraph)
@@ -256,22 +315,22 @@ static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_QueryInte
         REFIID riid, void **ret_iface)
 {
     DirectDrawMediaStreamImpl *This = impl_from_IDirectDrawMediaStream(iface);
-    TRACE("(%p/%p)->(%s,%p)\n", iface, This, debugstr_guid(riid), ret_iface);
-    return IAMMediaStream_QueryInterface(&This->IAMMediaStream_iface, riid, ret_iface);
+
+    return IPin_QueryInterface(&This->pin.pin.IPin_iface, riid, ret_iface);
 }
 
 static ULONG WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_AddRef(IDirectDrawMediaStream *iface)
 {
     DirectDrawMediaStreamImpl *This = impl_from_IDirectDrawMediaStream(iface);
-    TRACE("(%p/%p)\n", iface, This);
-    return IAMMediaStream_AddRef(&This->IAMMediaStream_iface);
+
+    return IPin_AddRef(&This->pin.pin.IPin_iface);
 }
 
 static ULONG WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_Release(IDirectDrawMediaStream *iface)
 {
     DirectDrawMediaStreamImpl *This = impl_from_IDirectDrawMediaStream(iface);
-    TRACE("(%p/%p)\n", iface, This);
-    return IAMMediaStream_Release(&This->IAMMediaStream_iface);
+
+    return IPin_Release(&This->pin.pin.IPin_iface);
 }
 
 /*** IMediaStream methods ***/
@@ -409,6 +468,84 @@ static const struct IDirectDrawMediaStreamVtbl DirectDrawMediaStreamImpl_IDirect
     DirectDrawMediaStreamImpl_IDirectDrawMediaStream_GetTimePerFrame
 };
 
+HRESULT WINAPI DirectDrawMediaStreamImpl_BasePinImpl_CheckMediaType(BasePin *This, const AM_MEDIA_TYPE *pmt)
+{
+    TRACE("Checking media type %s - %s\n", debugstr_guid(&pmt->majortype), debugstr_guid(&pmt->subtype));
+
+    if (IsEqualGUID(&pmt->majortype, &MEDIATYPE_Video))
+    {
+        if (IsEqualGUID(&pmt->subtype, &MEDIASUBTYPE_RGB1) ||
+            IsEqualGUID(&pmt->subtype, &MEDIASUBTYPE_RGB4) ||
+            IsEqualGUID(&pmt->subtype, &MEDIASUBTYPE_RGB8)  ||
+            IsEqualGUID(&pmt->subtype, &MEDIASUBTYPE_RGB565) ||
+            IsEqualGUID(&pmt->subtype, &MEDIASUBTYPE_RGB555) ||
+            IsEqualGUID(&pmt->subtype, &MEDIASUBTYPE_RGB24) ||
+            IsEqualGUID(&pmt->subtype, &MEDIASUBTYPE_RGB32))
+        {
+            TRACE("Video sub-type %s matches\n", debugstr_guid(&pmt->subtype));
+            return S_OK;
+        }
+    }
+
+    return S_FALSE;
+}
+
+static HRESULT WINAPI DirectDrawMediaStreamImpl_BasePinImpl_GetMediaType(BasePin *This, int index, AM_MEDIA_TYPE *amt)
+{
+    /* FIXME: Reset structure as we only fill majortype and minortype for now */
+    ZeroMemory(amt, sizeof(*amt));
+
+    amt->majortype = MEDIATYPE_Video;
+
+    switch (index)
+    {
+        case 0:
+            amt->subtype = MEDIASUBTYPE_RGB1;
+            break;
+        case 1:
+            amt->subtype = MEDIASUBTYPE_RGB4;
+            break;
+        case 2:
+            amt->subtype = MEDIASUBTYPE_RGB8;
+            break;
+        case 3:
+            amt->subtype = MEDIASUBTYPE_RGB565;
+            break;
+        case 4:
+            amt->subtype = MEDIASUBTYPE_RGB555;
+            break;
+        case 5:
+            amt->subtype = MEDIASUBTYPE_RGB24;
+            break;
+        case 6:
+            amt->subtype = MEDIASUBTYPE_RGB32;
+            break;
+        default:
+            return S_FALSE;
+    }
+
+    return S_OK;
+}
+
+HRESULT WINAPI DirectDrawMediaStreamImpl_BaseInputPinImpl_Receive(BaseInputPin *This, IMediaSample *pSample)
+{
+    DirectDrawMediaStreamImpl *stream = impl_from_DirectDrawMediaStream_IPin(&This->pin.IPin_iface);
+
+    FIXME("(%p)->(%p) stub!\n", stream, pSample);
+
+    return E_NOTIMPL;
+}
+
+static const BaseInputPinFuncTable DirectDrawMediaStreamImpl_BaseInputPinFuncTable = {
+    {
+        DirectDrawMediaStreamImpl_BasePinImpl_CheckMediaType,
+        NULL,
+        BasePinImpl_GetMediaTypeVersion,
+        DirectDrawMediaStreamImpl_BasePinImpl_GetMediaType,
+    },
+    DirectDrawMediaStreamImpl_BaseInputPinImpl_Receive,
+};
+
 HRESULT ddrawmediastream_create(IMultiMediaStream *parent, const MSPID *purpose_id,
         STREAM_TYPE stream_type, IAMMediaStream **media_stream)
 {
@@ -416,17 +553,43 @@ HRESULT ddrawmediastream_create(IMultiMediaStream *parent, const MSPID *purpose_
 
     TRACE("(%p,%s,%p)\n", parent, debugstr_guid(purpose_id), media_stream);
 
-    object = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(DirectDrawMediaStreamImpl));
-    if (!object)
-        return E_OUTOFMEMORY;
+    {
+        IPin *pin = NULL;
+        {
+            PIN_INFO info;
+            info.pFilter = NULL;
+            info.dir = PINDIR_INPUT;
+            /* Pin name is "I{guid MSPID_PrimaryVideo or MSPID_PrimaryAudio}" */
+            info.achName[0] = L'I';
+            StringFromGUID2(purpose_id, &info.achName[1], MAX_PIN_NAME - 1);
+            {
+                HRESULT hr = BaseInputPin_Construct(
+                    &DirectDrawMediaStreamImpl_IPin_Vtbl,
+                    sizeof(DirectDrawMediaStreamImpl),
+                    &info,
+                    &DirectDrawMediaStreamImpl_BaseInputPinFuncTable,
+                    NULL,
+                    NULL,
+                    &pin);
+                if (FAILED(hr))
+                {
+                    return hr;
+                }
+            }
+        }
+        object = impl_from_DirectDrawMediaStream_IPin(pin);
+    }
 
     object->IAMMediaStream_iface.lpVtbl = &DirectDrawMediaStreamImpl_IAMMediaStream_Vtbl;
     object->IDirectDrawMediaStream_iface.lpVtbl = &DirectDrawMediaStreamImpl_IDirectDrawMediaStream_Vtbl;
-    object->ref = 1;
 
     object->parent = parent;
     object->purpose_id = *purpose_id;
     object->stream_type = stream_type;
+    object->ddraw = NULL;
+
+    InitializeCriticalSection(&object->critical_section);
+    object->pin.pin.pCritSec = &object->critical_section;
 
     *media_stream = &object->IAMMediaStream_iface;
 
@@ -434,13 +597,95 @@ HRESULT ddrawmediastream_create(IMultiMediaStream *parent, const MSPID *purpose_
 }
 
 typedef struct {
+    BaseInputPin pin;
     IAMMediaStream IAMMediaStream_iface;
     IAudioMediaStream IAudioMediaStream_iface;
     LONG ref;
     IMultiMediaStream* parent;
     MSPID purpose_id;
     STREAM_TYPE stream_type;
+    CRITICAL_SECTION critical_section;
 } AudioMediaStreamImpl;
+
+static inline AudioMediaStreamImpl *impl_from_AudioMediaStream_IPin(IPin *iface)
+{
+    return CONTAINING_RECORD(iface, AudioMediaStreamImpl, pin.pin.IPin_iface);
+}
+
+/*** IUnknown methods ***/
+static HRESULT WINAPI AudioMediaStreamImpl_IPin_QueryInterface(IPin *iface, REFIID riid, void **ret_iface)
+{
+    AudioMediaStreamImpl *This = impl_from_AudioMediaStream_IPin(iface);
+
+    TRACE("(%p/%p)->(%s,%p)\n", iface, This, debugstr_guid(riid), ret_iface);
+
+    if (IsEqualGUID(riid, &IID_IUnknown) ||
+        IsEqualGUID(riid, &IID_IPin))
+    {
+        IPin_AddRef(iface);
+        *ret_iface = iface;
+        return S_OK;
+    }
+    else if (IsEqualGUID(riid, &IID_IMemInputPin))
+    {
+        IPin_AddRef(iface);
+        *ret_iface = &This->pin.IMemInputPin_iface;
+        return S_OK;
+    }
+    else if (IsEqualGUID(riid, &IID_IMediaStream) ||
+        IsEqualGUID(riid, &IID_IAMMediaStream))
+    {
+        IPin_AddRef(iface);
+        *ret_iface = &This->IAMMediaStream_iface;
+        return S_OK;
+    }
+    else if (IsEqualGUID(riid, &IID_IAudioMediaStream))
+    {
+        IPin_AddRef(iface);
+        *ret_iface = &This->IAudioMediaStream_iface;
+        return S_OK;
+    }
+
+    ERR("(%p)->(%s,%p),not found\n", This, debugstr_guid(riid), ret_iface);
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI AudioMediaStreamImpl_IPin_Release(IPin *iface)
+{
+    AudioMediaStreamImpl *This = impl_from_AudioMediaStream_IPin(iface);
+    ULONG ref = InterlockedDecrement(&This->pin.pin.refCount);
+
+    TRACE("(%p/%p)->(): new ref = %d\n", iface, This, ref);
+
+    if (!ref)
+    {
+        DeleteCriticalSection(&This->critical_section);
+        BaseInputPin_Destroy(&This->pin);
+    }
+    return ref;
+}
+
+static const IPinVtbl AudioMediaStreamImpl_IPin_Vtbl =
+{
+    AudioMediaStreamImpl_IPin_QueryInterface,
+    BasePinImpl_AddRef,
+    AudioMediaStreamImpl_IPin_Release,
+    BaseInputPinImpl_Connect,
+    BaseInputPinImpl_ReceiveConnection,
+    BasePinImpl_Disconnect,
+    BasePinImpl_ConnectedTo,
+    BasePinImpl_ConnectionMediaType,
+    BasePinImpl_QueryPinInfo,
+    BasePinImpl_QueryDirection,
+    BasePinImpl_QueryId,
+    BasePinImpl_QueryAccept,
+    BasePinImpl_EnumMediaTypes,
+    BasePinImpl_QueryInternalConnections,
+    BaseInputPinImpl_EndOfStream,
+    BaseInputPinImpl_BeginFlush,
+    BaseInputPinImpl_EndFlush,
+    BasePinImpl_NewSegment,
+};
 
 static inline AudioMediaStreamImpl *impl_from_AudioMediaStream_IAMMediaStream(IAMMediaStream *iface)
 {
@@ -453,48 +698,21 @@ static HRESULT WINAPI AudioMediaStreamImpl_IAMMediaStream_QueryInterface(IAMMedi
 {
     AudioMediaStreamImpl *This = impl_from_AudioMediaStream_IAMMediaStream(iface);
 
-    TRACE("(%p/%p)->(%s,%p)\n", iface, This, debugstr_guid(riid), ret_iface);
-
-    if (IsEqualGUID(riid, &IID_IUnknown) ||
-        IsEqualGUID(riid, &IID_IMediaStream) ||
-        IsEqualGUID(riid, &IID_IAMMediaStream))
-    {
-        IAMMediaStream_AddRef(iface);
-        *ret_iface = iface;
-        return S_OK;
-    }
-    else if (IsEqualGUID(riid, &IID_IAudioMediaStream))
-    {
-        IAMMediaStream_AddRef(iface);
-        *ret_iface = &This->IAudioMediaStream_iface;
-        return S_OK;
-    }
-
-    ERR("(%p)->(%s,%p),not found\n", This, debugstr_guid(riid), ret_iface);
-    return E_NOINTERFACE;
+    return IPin_QueryInterface(&This->pin.pin.IPin_iface, riid, ret_iface);
 }
 
 static ULONG WINAPI AudioMediaStreamImpl_IAMMediaStream_AddRef(IAMMediaStream *iface)
 {
     AudioMediaStreamImpl *This = impl_from_AudioMediaStream_IAMMediaStream(iface);
-    ULONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p/%p)->(): new ref = %u\n", iface, This, ref);
-
-    return ref;
+    return IPin_AddRef(&This->pin.pin.IPin_iface);
 }
 
 static ULONG WINAPI AudioMediaStreamImpl_IAMMediaStream_Release(IAMMediaStream *iface)
 {
     AudioMediaStreamImpl *This = impl_from_AudioMediaStream_IAMMediaStream(iface);
-    ULONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p/%p)->(): new ref = %u\n", iface, This, ref);
-
-    if (!ref)
-        HeapFree(GetProcessHeap(), 0, This);
-
-    return ref;
+    return IPin_Release(&This->pin.pin.IPin_iface);
 }
 
 /*** IMediaStream methods ***/
@@ -601,9 +819,11 @@ static HRESULT WINAPI AudioMediaStreamImpl_IAMMediaStream_JoinFilter(IAMMediaStr
 {
     AudioMediaStreamImpl *This = impl_from_AudioMediaStream_IAMMediaStream(iface);
 
-    FIXME("(%p/%p)->(%p) stub!\n", This, iface, media_stream_filter);
+    TRACE("(%p/%p)->(%p)\n", This, iface, media_stream_filter);
 
-    return S_FALSE;
+    This->pin.pin.pinInfo.pFilter = (IBaseFilter *)media_stream_filter;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI AudioMediaStreamImpl_IAMMediaStream_JoinFilterGraph(IAMMediaStream *iface, IFilterGraph *filtergraph)
@@ -647,21 +867,21 @@ static HRESULT WINAPI AudioMediaStreamImpl_IAudioMediaStream_QueryInterface(IAud
 {
     AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
     TRACE("(%p/%p)->(%s,%p)\n", iface, This, debugstr_guid(riid), ret_iface);
-    return IAMMediaStream_QueryInterface(&This->IAMMediaStream_iface, riid, ret_iface);
+    return IPin_QueryInterface(&This->pin.pin.IPin_iface, riid, ret_iface);
 }
 
 static ULONG WINAPI AudioMediaStreamImpl_IAudioMediaStream_AddRef(IAudioMediaStream *iface)
 {
     AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
     TRACE("(%p/%p)\n", iface, This);
-    return IAMMediaStream_AddRef(&This->IAMMediaStream_iface);
+    return IPin_AddRef(&This->pin.pin.IPin_iface);
 }
 
 static ULONG WINAPI AudioMediaStreamImpl_IAudioMediaStream_Release(IAudioMediaStream *iface)
 {
     AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
     TRACE("(%p/%p)\n", iface, This);
-    return IAMMediaStream_Release(&This->IAMMediaStream_iface);
+    return IPin_Release(&This->pin.pin.IPin_iface);
 }
 
 /*** IMediaStream methods ***/
@@ -768,24 +988,100 @@ static const struct IAudioMediaStreamVtbl AudioMediaStreamImpl_IAudioMediaStream
     AudioMediaStreamImpl_IAudioMediaStream_CreateSample
 };
 
+HRESULT WINAPI AudioMediaStreamImpl_BasePinImpl_CheckMediaType(BasePin *This, const AM_MEDIA_TYPE *pmt)
+{
+    TRACE("Checking media type %s - %s\n", debugstr_guid(&pmt->majortype), debugstr_guid(&pmt->subtype));
+
+    if (IsEqualGUID(&pmt->majortype, &MEDIATYPE_Audio))
+    {
+        if (IsEqualGUID(&pmt->subtype, &MEDIASUBTYPE_PCM))
+        {
+            TRACE("Audio sub-type %s matches\n", debugstr_guid(&pmt->subtype));
+            return S_OK;
+        }
+    }
+
+    return S_FALSE;
+}
+
+static HRESULT WINAPI AudioMediaStreamImpl_BasePinImpl_GetMediaType(BasePin *This, int index, AM_MEDIA_TYPE *amt)
+{
+    /* FIXME: Reset structure as we only fill majortype and minortype for now */
+    ZeroMemory(amt, sizeof(*amt));
+
+    if (index)
+    {
+        return S_FALSE;
+    }
+
+    amt->majortype = MEDIATYPE_Audio;
+    amt->subtype = MEDIASUBTYPE_PCM;
+
+    return S_OK;
+}
+
+HRESULT WINAPI AudioMediaStreamImpl_BaseInputPinImpl_Receive(BaseInputPin *This, IMediaSample *pSample)
+{
+    AudioMediaStreamImpl *stream = impl_from_AudioMediaStream_IPin(&This->pin.IPin_iface);
+
+    FIXME("(%p)->(%p) stub!\n", stream, pSample);
+
+    return E_NOTIMPL;
+}
+
+static const BaseInputPinFuncTable AudioMediaStreamImpl_BaseInputPinFuncTable = {
+    {
+        AudioMediaStreamImpl_BasePinImpl_CheckMediaType,
+        NULL,
+        BasePinImpl_GetMediaTypeVersion,
+        AudioMediaStreamImpl_BasePinImpl_GetMediaType,
+    },
+    AudioMediaStreamImpl_BaseInputPinImpl_Receive,
+};
+
 HRESULT audiomediastream_create(IMultiMediaStream *parent, const MSPID *purpose_id,
         STREAM_TYPE stream_type, IAMMediaStream **media_stream)
 {
-    AudioMediaStreamImpl *object;
+    AudioMediaStreamImpl *object = NULL;
 
     TRACE("(%p,%s,%p)\n", parent, debugstr_guid(purpose_id), media_stream);
 
-    object = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(AudioMediaStreamImpl));
-    if (!object)
-        return E_OUTOFMEMORY;
+    {
+        IPin *pin = NULL;
+        {
+            PIN_INFO info;
+            info.pFilter = NULL;
+            info.dir = PINDIR_INPUT;
+            /* Pin name is "I{guid MSPID_PrimaryVideo or MSPID_PrimaryAudio}" */
+            info.achName[0] = L'I';
+            StringFromGUID2(purpose_id, &info.achName[1], MAX_PIN_NAME - 1);
+            {
+                HRESULT hr = BaseInputPin_Construct(
+                    &AudioMediaStreamImpl_IPin_Vtbl,
+                    sizeof(AudioMediaStreamImpl),
+                    &info,
+                    &AudioMediaStreamImpl_BaseInputPinFuncTable,
+                    NULL,
+                    NULL,
+                    &pin);
+                if (FAILED(hr))
+                {
+                    return hr;
+                }
+            }
+        }
+        object = impl_from_AudioMediaStream_IPin(pin);
+    }
 
     object->IAMMediaStream_iface.lpVtbl = &AudioMediaStreamImpl_IAMMediaStream_Vtbl;
     object->IAudioMediaStream_iface.lpVtbl = &AudioMediaStreamImpl_IAudioMediaStream_Vtbl;
-    object->ref = 1;
 
     object->parent = parent;
     object->purpose_id = *purpose_id;
     object->stream_type = stream_type;
+
+    InitializeCriticalSection(&object->critical_section);
+    object->pin.pin.pCritSec = &object->critical_section;
 
     *media_stream = &object->IAMMediaStream_iface;
 
