@@ -1153,9 +1153,19 @@ static ULONG WINAPI IDirectDrawStreamSampleImpl_Release(IDirectDrawStreamSample 
 /*** IStreamSample methods ***/
 static HRESULT WINAPI IDirectDrawStreamSampleImpl_GetMediaStream(IDirectDrawStreamSample *iface, IMediaStream **media_stream)
 {
-    FIXME("(%p)->(%p): stub\n", iface, media_stream);
+    IDirectDrawStreamSampleImpl *This = impl_from_IDirectDrawStreamSample(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%p)\n", iface, media_stream);
+
+    if (!media_stream)
+    {
+        return E_POINTER;
+    }
+
+    IMediaStream_AddRef(This->parent);
+    *media_stream = This->parent;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI IDirectDrawStreamSampleImpl_GetSampleTimes(IDirectDrawStreamSample *iface, STREAM_TIME *start_time,
@@ -1366,9 +1376,19 @@ static ULONG WINAPI IAudioStreamSampleImpl_Release(IAudioStreamSample *iface)
 /*** IStreamSample methods ***/
 static HRESULT WINAPI IAudioStreamSampleImpl_GetMediaStream(IAudioStreamSample *iface, IMediaStream **media_stream)
 {
-    FIXME("(%p)->(%p): stub\n", iface, media_stream);
+    IAudioStreamSampleImpl *This = impl_from_IAudioStreamSample(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%p)\n", iface, media_stream);
+
+    if (!media_stream)
+    {
+        return E_POINTER;
+    }
+
+    IMediaStream_AddRef(This->parent);
+    *media_stream = This->parent;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI IAudioStreamSampleImpl_GetSampleTimes(IAudioStreamSample *iface, STREAM_TIME *start_time,
