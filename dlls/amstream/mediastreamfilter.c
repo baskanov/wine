@@ -191,6 +191,31 @@ static HRESULT WINAPI MediaStreamFilterImpl_AddMediaStream(IMediaStreamFilter* i
 
     TRACE("(%p)->(%p)\n", iface, pAMMediaStream);
 
+    {
+        MSPID new_purpose_id;
+        hr = IAMMediaStream_GetInformation(pAMMediaStream, &new_purpose_id, NULL);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+        {
+            unsigned int i = 0;
+            for (i = 0; i < This->nb_streams; ++i)
+            {
+                MSPID purpose_id;
+                hr = IMediaStream_GetInformation(This->streams[i], &purpose_id, NULL);
+                if (FAILED(hr))
+                {
+                    return hr;
+                }
+                if (IsEqualGUID(&new_purpose_id, &purpose_id))
+                {
+                    return MS_E_PURPOSEID;
+                }
+            }
+        }
+    }
+
     streams = CoTaskMemRealloc(This->streams, (This->nb_streams + 1) * sizeof(IMediaStream*));
     if (!streams)
         return E_OUTOFMEMORY;
