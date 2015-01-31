@@ -113,23 +113,77 @@ static HRESULT WINAPI MediaStreamFilterImpl_GetClassID(IMediaStreamFilter *iface
 
 static HRESULT WINAPI MediaStreamFilterImpl_Stop(IMediaStreamFilter *iface)
 {
-    FIXME("(%p)->(): Stub!\n", iface);
+    IMediaStreamFilterImpl *This = impl_from_IMediaStreamFilter(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->()\n", iface);
+
+    EnterCriticalSection(&This->filter.csFilter);
+    This->filter.state = State_Stopped;
+    LeaveCriticalSection(&This->filter.csFilter);
+
+    {
+        unsigned int i = 0;
+        for (i = 0; i < This->nb_streams; ++i)
+        {
+            HRESULT hr = IAMMediaStream_SetState((IAMMediaStream *)This->streams[i], This->filter.state);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
+        }
+    }
+
+    return S_OK;
 }
 
 static HRESULT WINAPI MediaStreamFilterImpl_Pause(IMediaStreamFilter *iface)
 {
-    FIXME("(%p)->(): Stub!\n", iface);
+    IMediaStreamFilterImpl *This = impl_from_IMediaStreamFilter(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->()\n", iface);
+
+    EnterCriticalSection(&This->filter.csFilter);
+    This->filter.state = State_Paused;
+    LeaveCriticalSection(&This->filter.csFilter);
+
+    {
+        unsigned int i = 0;
+        for (i = 0; i < This->nb_streams; ++i)
+        {
+            HRESULT hr = IAMMediaStream_SetState((IAMMediaStream *)This->streams[i], This->filter.state);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
+        }
+    }
+
+    return S_OK;
 }
 
 static HRESULT WINAPI MediaStreamFilterImpl_Run(IMediaStreamFilter *iface, REFERENCE_TIME start)
 {
-    FIXME("(%p)->(%s): Stub!\n", iface, wine_dbgstr_longlong(start));
+    IMediaStreamFilterImpl *This = impl_from_IMediaStreamFilter(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%s)\n", iface, wine_dbgstr_longlong(start));
+
+    EnterCriticalSection(&This->filter.csFilter);
+    This->filter.state = State_Running;
+    LeaveCriticalSection(&This->filter.csFilter);
+
+    {
+        unsigned int i = 0;
+        for (i = 0; i < This->nb_streams; ++i)
+        {
+            HRESULT hr = IAMMediaStream_SetState((IAMMediaStream *)This->streams[i], This->filter.state);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
+        }
+    }
+
+    return S_OK;
 }
 
 static HRESULT WINAPI MediaStreamFilterImpl_GetState(IMediaStreamFilter *iface, DWORD ms_timeout, FILTER_STATE *state)
