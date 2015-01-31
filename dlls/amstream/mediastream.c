@@ -1092,6 +1092,8 @@ typedef struct {
     IDirectDrawStreamSample IDirectDrawStreamSample_iface;
     LONG ref;
     IMediaStream *parent;
+    STREAM_TIME start_time;
+    STREAM_TIME end_time;
     IDirectDrawSurface *surface;
     RECT rect;
 } IDirectDrawStreamSampleImpl;
@@ -1171,17 +1173,56 @@ static HRESULT WINAPI IDirectDrawStreamSampleImpl_GetMediaStream(IDirectDrawStre
 static HRESULT WINAPI IDirectDrawStreamSampleImpl_GetSampleTimes(IDirectDrawStreamSample *iface, STREAM_TIME *start_time,
                                                                  STREAM_TIME *end_time, STREAM_TIME *current_time)
 {
-    FIXME("(%p)->(%p,%p,%p): stub\n", iface, start_time, end_time, current_time);
+    IDirectDrawStreamSampleImpl *This = impl_from_IDirectDrawStreamSample(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%p,%p,%p)\n", iface, start_time, end_time, current_time);
+
+    if (!start_time || !end_time || !current_time)
+    {
+        return E_POINTER;
+    }
+
+    {
+        IMultiMediaStream *multi_media_stream = NULL;
+        {
+            HRESULT hr = IMediaStream_GetMultiMediaStream(This->parent, &multi_media_stream);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
+        }
+        {
+            HRESULT hr = IMultiMediaStream_GetTime(multi_media_stream, current_time);
+            IMultiMediaStream_Release(multi_media_stream);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
+        }
+    }
+
+    *start_time = This->start_time;
+    *end_time = This->end_time;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI IDirectDrawStreamSampleImpl_SetSampleTimes(IDirectDrawStreamSample *iface, const STREAM_TIME *start_time,
                                                                  const STREAM_TIME *end_time)
 {
-    FIXME("(%p)->(%p,%p): stub\n", iface, start_time, end_time);
+    IDirectDrawStreamSampleImpl *This = impl_from_IDirectDrawStreamSample(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%p,%p)\n", iface, start_time, end_time);
+
+    if (!start_time || !end_time)
+    {
+        return E_POINTER;
+    }
+
+    This->start_time = *start_time;
+    This->end_time = *end_time;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI IDirectDrawStreamSampleImpl_Update(IDirectDrawStreamSample *iface, DWORD flags, HANDLE event,
@@ -1321,6 +1362,8 @@ typedef struct {
     IAudioStreamSample IAudioStreamSample_iface;
     LONG ref;
     IMediaStream *parent;
+    STREAM_TIME start_time;
+    STREAM_TIME end_time;
     IAudioData *audio_data;
 } IAudioStreamSampleImpl;
 
@@ -1394,17 +1437,56 @@ static HRESULT WINAPI IAudioStreamSampleImpl_GetMediaStream(IAudioStreamSample *
 static HRESULT WINAPI IAudioStreamSampleImpl_GetSampleTimes(IAudioStreamSample *iface, STREAM_TIME *start_time,
                                                                  STREAM_TIME *end_time, STREAM_TIME *current_time)
 {
-    FIXME("(%p)->(%p,%p,%p): stub\n", iface, start_time, end_time, current_time);
+    IAudioStreamSampleImpl *This = impl_from_IAudioStreamSample(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%p,%p,%p)\n", iface, start_time, end_time, current_time);
+
+    if (!start_time || !end_time || !current_time)
+    {
+        return E_POINTER;
+    }
+
+    {
+        IMultiMediaStream *multi_media_stream = NULL;
+        {
+            HRESULT hr = IMediaStream_GetMultiMediaStream(This->parent, &multi_media_stream);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
+        }
+        {
+            HRESULT hr = IMultiMediaStream_GetTime(multi_media_stream, current_time);
+            IMultiMediaStream_Release(multi_media_stream);
+            if (FAILED(hr))
+            {
+                return hr;
+            }
+        }
+    }
+
+    *start_time = This->start_time;
+    *end_time = This->end_time;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI IAudioStreamSampleImpl_SetSampleTimes(IAudioStreamSample *iface, const STREAM_TIME *start_time,
                                                                  const STREAM_TIME *end_time)
 {
-    FIXME("(%p)->(%p,%p): stub\n", iface, start_time, end_time);
+    IAudioStreamSampleImpl *This = impl_from_IAudioStreamSample(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%p,%p)\n", iface, start_time, end_time);
+
+    if (!start_time || !end_time)
+    {
+        return E_POINTER;
+    }
+
+    This->start_time = *start_time;
+    This->end_time = *end_time;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI IAudioStreamSampleImpl_Update(IAudioStreamSample *iface, DWORD flags, HANDLE event,
