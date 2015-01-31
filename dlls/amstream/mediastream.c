@@ -938,13 +938,19 @@ static HRESULT WINAPI AudioMediaStreamImpl_IAudioMediaStream_GetFormat(IAudioMed
 {
     AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
 
-    FIXME("(%p/%p)->(%p) stub!\n", iface, This, wave_format_current);
+    TRACE("(%p/%p)->(%p)\n", iface, This, wave_format_current);
 
     if (!wave_format_current)
         return E_POINTER;
 
-    return MS_E_NOSTREAM;
+    if (!This->pin.pin.mtCurrent.pbFormat)
+    {
+        return E_NOTDETERMINED;
+    }
 
+    *wave_format_current = *(const WAVEFORMATEX *)This->pin.pin.mtCurrent.pbFormat;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI AudioMediaStreamImpl_IAudioMediaStream_SetFormat(IAudioMediaStream *iface, const WAVEFORMATEX *wave_format)
