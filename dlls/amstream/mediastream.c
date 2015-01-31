@@ -604,6 +604,7 @@ typedef struct {
     IMultiMediaStream* parent;
     MSPID purpose_id;
     STREAM_TYPE stream_type;
+    FILTER_STATE state;
     CRITICAL_SECTION critical_section;
 } AudioMediaStreamImpl;
 
@@ -801,9 +802,22 @@ static HRESULT WINAPI AudioMediaStreamImpl_IAMMediaStream_SetState(IAMMediaStrea
 {
     AudioMediaStreamImpl *This = impl_from_AudioMediaStream_IAMMediaStream(iface);
 
-    FIXME("(%p/%p)->(%u) stub!\n", This, iface, state);
+    TRACE("(%p/%p)->(%u)\n", This, iface, state);
 
-    return S_FALSE;
+    EnterCriticalSection(&This->critical_section);
+    switch (state)
+    {
+    case State_Stopped:
+    case State_Paused:
+    case State_Running:
+        This->state = state;
+        break;
+    default:
+        return E_INVALIDARG;
+    }
+    LeaveCriticalSection(&This->critical_section);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI AudioMediaStreamImpl_IAMMediaStream_JoinAMMultiMediaStream(IAMMediaStream *iface, IAMMultiMediaStream *am_multi_media_stream)
@@ -1085,6 +1099,7 @@ HRESULT audiomediastream_create(IMultiMediaStream *parent, const MSPID *purpose_
     object->parent = parent;
     object->purpose_id = *purpose_id;
     object->stream_type = stream_type;
+    object->state = State_Stopped;
 
     InitializeCriticalSection(&object->critical_section);
     object->pin.pin.pCritSec = &object->critical_section;
