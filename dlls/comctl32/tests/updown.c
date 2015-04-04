@@ -520,6 +520,8 @@ static void test_updown_buddy(void)
     HWND updown, buddyReturn, buddy;
     WNDPROC proc;
     DWORD style;
+    RECT r;
+    RECT r2;
 
     updown = create_updown_control(UDS_ALIGNRIGHT, g_edit);
 
@@ -562,6 +564,34 @@ static void test_updown_buddy(void)
         /* updown uses subclass helpers for buddy on >5.8x systems */
         ok(GetPropA(buddy, "CC32SubclassInfo") != NULL, "Expected CC32SubclassInfo property\n");
     }
+
+    DestroyWindow(updown);
+
+    DestroyWindow(buddy);
+
+    buddy = CreateWindowExA(0, WC_EDITA, NULL, WS_CHILD | WS_BORDER | WS_VISIBLE,
+            0, 0, 100, 100, parent_wnd, NULL, GetModuleHandleA(NULL), NULL);
+    ok(buddy != NULL, "Failed to create edit control\n");
+
+    updown = CreateWindowA (UPDOWN_CLASSA, 0, WS_CHILD | WS_BORDER | WS_VISIBLE | UDS_ALIGNRIGHT,
+            0, 0, 20, 20, parent_wnd, (HMENU)(DWORD_PTR)1, GetModuleHandleA(NULL), 0);
+    ok(updown != NULL, "Failed to create updown control\n");
+
+    /* attach the buddy */
+    SendMessageA(updown, UDM_SETBUDDY, (WPARAM)buddy, 0);
+
+    /* check that the edit was resized */
+    r.right = 0x1234ABCD;
+    GetClientRect(buddy, &r);
+    ok(r.right < 100, "Expected width < 100, got %d\n", r.right);
+
+    /* attach the same buddy again */
+    SendMessageA(updown, UDM_SETBUDDY, (WPARAM)buddy, 0);
+
+    /* check that the edit was resized further */
+    r2.right = 0x1234ABCD;
+    GetClientRect(buddy, &r2);
+    ok(r2.right < r.right, "Expected width < %d, got %d\n", r.right, r2.right);
 
     DestroyWindow(updown);
 
