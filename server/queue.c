@@ -3039,7 +3039,12 @@ DECL_HANDLER(set_caret_info)
     }
     if (req->flags & SET_CARET_STATE)
     {
-        if (req->state == -1) input->caret_state = !input->caret_state;
+        if (req->state == CARET_STATE_TOGGLE) input->caret_state = !input->caret_state;
+        else if (req->state == CARET_STATE_ON_IF_POS_CHANGED)
+        {
+            if (req->x != reply->old_rect.left || req->y != reply->old_rect.top)
+                input->caret_state = 1;
+        }
         else input->caret_state = !!req->state;
     }
 }
