@@ -279,71 +279,48 @@ static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_GetMultiM
         IMultiMediaStream **multi_media_stream)
 {
     DirectDrawMediaStreamImpl *This = impl_from_IDirectDrawMediaStream(iface);
-
     TRACE("(%p/%p)->(%p)\n", This, iface, multi_media_stream);
-
-    if (!multi_media_stream)
-        return E_POINTER;
-
-    IMultiMediaStream_AddRef(This->parent);
-    *multi_media_stream = This->parent;
-
-    return S_OK;
+    return IAMMediaStream_GetMultiMediaStream(&This->IAMMediaStream_iface, multi_media_stream);
 }
 
 static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_GetInformation(IDirectDrawMediaStream *iface,
         MSPID *purpose_id, STREAM_TYPE *type)
 {
     DirectDrawMediaStreamImpl *This = impl_from_IDirectDrawMediaStream(iface);
-
     TRACE("(%p/%p)->(%p,%p)\n", This, iface, purpose_id, type);
-
-    if (purpose_id)
-        *purpose_id = This->purpose_id;
-    if (type)
-        *type = This->stream_type;
-
-    return S_OK;
+    return IAMMediaStream_GetInformation(&This->IAMMediaStream_iface, purpose_id, type);
 }
 
 static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_SetSameFormat(IDirectDrawMediaStream *iface,
         IMediaStream *pStreamThatHasDesiredFormat, DWORD dwFlags)
 {
     DirectDrawMediaStreamImpl *This = impl_from_IDirectDrawMediaStream(iface);
-
-    FIXME("(%p/%p)->(%p,%x) stub!\n", This, iface, pStreamThatHasDesiredFormat, dwFlags);
-
-    return S_FALSE;
+    TRACE("(%p/%p)->(%p,%x)\n", This, iface, pStreamThatHasDesiredFormat, dwFlags);
+    return IAMMediaStream_SetSameFormat(&This->IAMMediaStream_iface, pStreamThatHasDesiredFormat, dwFlags);
 }
 
 static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_AllocateSample(IDirectDrawMediaStream *iface,
         DWORD dwFlags, IStreamSample **ppSample)
 {
     DirectDrawMediaStreamImpl *This = impl_from_IDirectDrawMediaStream(iface);
-
-    FIXME("(%p/%p)->(%x,%p) stub!\n", This, iface, dwFlags, ppSample);
-
-    return S_FALSE;
+    TRACE("(%p/%p)->(%x,%p)\n", This, iface, dwFlags, ppSample);
+    return IAMMediaStream_AllocateSample(&This->IAMMediaStream_iface, dwFlags, ppSample);
 }
 
 static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_CreateSharedSample(IDirectDrawMediaStream *iface,
         IStreamSample *pExistingSample, DWORD dwFlags, IStreamSample **ppSample)
 {
     DirectDrawMediaStreamImpl *This = impl_from_IDirectDrawMediaStream(iface);
-
-    FIXME("(%p/%p)->(%p,%x,%p) stub!\n", This, iface, pExistingSample, dwFlags, ppSample);
-
-    return S_FALSE;
+    TRACE("(%p/%p)->(%p,%x,%p)\n", This, iface, pExistingSample, dwFlags, ppSample);
+    return IAMMediaStream_CreateSharedSample(&This->IAMMediaStream_iface, pExistingSample, dwFlags, ppSample);
 }
 
 static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_SendEndOfStream(IDirectDrawMediaStream *iface,
         DWORD dwFlags)
 {
     DirectDrawMediaStreamImpl *This = impl_from_IDirectDrawMediaStream(iface);
-
-    FIXME("(%p/%p)->(%x) stub!\n", This, iface, dwFlags);
-
-    return S_FALSE;
+    TRACE("(%p/%p)->(%x)\n", This, iface, dwFlags);
+    return IAMMediaStream_SendEndOfStream(&This->IAMMediaStream_iface, dwFlags);
 }
 
 /*** IDirectDrawMediaStream methods ***/
@@ -692,71 +669,48 @@ static HRESULT WINAPI AudioMediaStreamImpl_IAudioMediaStream_GetMultiMediaStream
         IMultiMediaStream **multi_media_stream)
 {
     AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
-
     TRACE("(%p/%p)->(%p)\n", iface, This, multi_media_stream);
-
-    if (!multi_media_stream)
-        return E_POINTER;
-
-    IMultiMediaStream_AddRef(This->parent);
-    *multi_media_stream = This->parent;
-
-    return S_OK;
+    return IAMMediaStream_GetMultiMediaStream(&This->IAMMediaStream_iface, multi_media_stream);
 }
 
 static HRESULT WINAPI AudioMediaStreamImpl_IAudioMediaStream_GetInformation(IAudioMediaStream *iface,
         MSPID *purpose_id, STREAM_TYPE *type)
 {
     AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
-
     TRACE("(%p/%p)->(%p,%p)\n", iface, This, purpose_id, type);
-
-    if (purpose_id)
-        *purpose_id = This->purpose_id;
-    if (type)
-        *type = This->stream_type;
-
-    return S_OK;
+    return IAMMediaStream_GetInformation(&This->IAMMediaStream_iface, purpose_id, type);
 }
 
 static HRESULT WINAPI AudioMediaStreamImpl_IAudioMediaStream_SetSameFormat(IAudioMediaStream *iface,
         IMediaStream *stream_format, DWORD flags)
 {
     AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
-
-    FIXME("(%p/%p)->(%p,%x) stub!\n", iface, This, stream_format, flags);
-
-    return S_FALSE;
+    TRACE("(%p/%p)->(%p,%x)\n", iface, This, stream_format, flags);
+    return IAMMediaStream_SetSameFormat(&This->IAMMediaStream_iface, stream_format, flags);
 }
 
 static HRESULT WINAPI AudioMediaStreamImpl_IAudioMediaStream_AllocateSample(IAudioMediaStream *iface,
         DWORD flags, IStreamSample **sample)
 {
     AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
-
-    FIXME("(%p/%p)->(%x,%p) stub!\n", iface, This, flags, sample);
-
-    return S_FALSE;
+    TRACE("(%p/%p)->(%x,%p)\n", iface, This, flags, sample);
+    return IAMMediaStream_AllocateSample(&This->IAMMediaStream_iface, flags, sample);
 }
 
 static HRESULT WINAPI AudioMediaStreamImpl_IAudioMediaStream_CreateSharedSample(IAudioMediaStream *iface,
         IStreamSample *existing_sample, DWORD flags, IStreamSample **sample)
 {
     AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
-
-    FIXME("(%p/%p)->(%p,%x,%p) stub!\n", iface, This, existing_sample, flags, sample);
-
-    return S_FALSE;
+    TRACE("(%p/%p)->(%p,%x,%p)\n", iface, This, existing_sample, flags, sample);
+    return IAMMediaStream_CreateSharedSample(&This->IAMMediaStream_iface, existing_sample, flags, sample);
 }
 
 static HRESULT WINAPI AudioMediaStreamImpl_IAudioMediaStream_SendEndOfStream(IAudioMediaStream *iface,
         DWORD flags)
 {
     AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
-
-    FIXME("(%p/%p)->(%x) stub!\n", iface, This, flags);
-
-    return S_FALSE;
+    TRACE("(%p/%p)->(%x)\n", iface, This, flags);
+    return IAMMediaStream_SendEndOfStream(&This->IAMMediaStream_iface, flags);
 }
 
 /*** IAudioMediaStream methods ***/
