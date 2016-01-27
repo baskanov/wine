@@ -1503,7 +1503,7 @@ LSTATUS WINAPI RegQueryValueExW( HKEY hkey, LPCWSTR name, LPDWORD reserved, LPDW
 
     RtlInitUnicodeString( &name_str, name );
 
-    if (data) total_size = min( sizeof(buffer), *count + info_size );
+    if (data) total_size = min( sizeof(buffer) - info_size, *count ) + info_size;
     else
     {
         total_size = info_size;
@@ -1532,7 +1532,7 @@ LSTATUS WINAPI RegQueryValueExW( HKEY hkey, LPCWSTR name, LPDWORD reserved, LPDW
             memcpy( data, buf_ptr + info_size, total_size - info_size );
             /* if the type is REG_SZ and data is not 0-terminated
              * and there is enough space in the buffer NT appends a \0 */
-            if (total_size - info_size <= *count-sizeof(WCHAR) && is_string(info->Type))
+            if (total_size - info_size + sizeof(WCHAR) <= *count && is_string(info->Type))
             {
                 WCHAR *ptr = (WCHAR *)(data + total_size - info_size);
                 if (ptr > (WCHAR *)data && ptr[-1]) *ptr = 0;
