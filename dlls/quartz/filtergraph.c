@@ -2289,9 +2289,9 @@ static HRESULT all_renderers_seek(IFilterGraphImpl *This, fnFoundSeek FoundSeek,
             continue;
         hr = FoundSeek(This, seek, arg);
         IMediaSeeking_Release(seek);
-        if (hr_return != E_NOTIMPL)
+        if (hr != E_NOTIMPL)
             allnotimpl = FALSE;
-        if (hr_return == S_OK || (FAILED(hr) && hr != E_NOTIMPL && SUCCEEDED(hr_return)))
+        if (FAILED(hr) && hr != E_NOTIMPL && SUCCEEDED(hr_return))
             hr_return = hr;
     }
 
