@@ -83,7 +83,8 @@ static const struct object_creation_info object_creation[] =
     { &CLSID_AVIDec, AVIDec_create },
     { &CLSID_SystemClock, QUARTZ_CreateSystemClock },
     { &CLSID_ACMWrapper, ACMWrapper_create },
-    { &CLSID_WAVEParser, WAVEParser_create }
+    { &CLSID_WAVEParser, WAVEParser_create },
+    { &CLSID_CMpegAudioCodec, MPEGAudioCodec_create },
 };
 
 static HRESULT WINAPI DSCF_QueryInterface(IClassFactory *iface, REFIID riid, void **ppobj)
