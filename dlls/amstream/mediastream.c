@@ -477,6 +477,9 @@ HRESULT ddrawmediastream_create(IMultiMediaStream *parent, const MSPID *purpose_
     object->purpose_id = *purpose_id;
     object->stream_type = stream_type;
 
+    object->input_pin->pin.pin.pinInfo.achName[0] = 'I';
+    StringFromGUID2(purpose_id, object->input_pin->pin.pin.pinInfo.achName + 1, MAX_PIN_NAME - 1);
+
     hr = S_OK;
 
 out_unknown:
