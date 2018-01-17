@@ -891,12 +891,12 @@ static void test_directdrawstream_query_interface(void)
         IDirectDrawMediaStream_Release(directdraw_media_stream);
 
     result = IUnknown_QueryInterface(unknown, &IID_IPin, (void **)&pin);
-    todo_wine ok(S_OK == result, "got 0x%08x\n", result);
+    ok(S_OK == result, "got 0x%08x\n", result);
     if (S_OK == result)
         IPin_Release(pin);
 
     result = IUnknown_QueryInterface(unknown, &IID_IMemInputPin, (void **)&mem_input_pin);
-    todo_wine ok(S_OK == result, "got 0x%08x\n", result);
+    ok(S_OK == result, "got 0x%08x\n", result);
     if (S_OK == result)
         IMemInputPin_Release(mem_input_pin);
 
