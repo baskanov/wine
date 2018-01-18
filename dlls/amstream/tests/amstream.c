@@ -29,6 +29,8 @@
 #include "ks.h"
 #include "ksmedia.h"
 
+DEFINE_GUID(GUID_NULL,0,0,0,0,0,0,0,0,0,0,0);
+
 #define EXPECT_REF(obj,ref) _expect_ref((IUnknown*)obj, ref, __LINE__)
 static void _expect_ref(IUnknown* obj, ULONG ref, int line)
 {
@@ -36,6 +38,26 @@ static void _expect_ref(IUnknown* obj, ULONG ref, int line)
     IUnknown_AddRef(obj);
     rc = IUnknown_Release(obj);
     ok_(__FILE__,line)(rc == ref, "expected refcount %d, got %d\n", ref, rc);
+}
+
+static void FreeMediaType(AM_MEDIA_TYPE *media_type)
+{
+    if (media_type->pbFormat)
+    {
+        CoTaskMemFree(media_type->pbFormat);
+        media_type->pbFormat = NULL;
+    }
+    if (media_type->pUnk)
+    {
+        IUnknown_Release(media_type->pUnk);
+        media_type->pUnk = NULL;
+    }
+}
+
+static void DeleteMediaType(AM_MEDIA_TYPE *media_type)
+{
+    FreeMediaType(media_type);
+    CoTaskMemFree(media_type);
 }
 
 static const WCHAR filenameW[] = {'t','e','s','t','.','a','v','i',0};
@@ -903,6 +925,54 @@ static void test_directdrawstream_query_interface(void)
     IUnknown_Release(unknown);
 }
 
+static void test_directdrawstream_enum_media_types(void)
+{
+    IUnknown *unknown = create_directdraw_stream();
+    IPin *pin = NULL;
+    IEnumMediaTypes *enum_media_types = NULL;
+    AM_MEDIA_TYPE *media_type;
+
+    HRESULT result;
+
+    result = IUnknown_QueryInterface(unknown, &IID_IPin, (void **)&pin);
+    if (FAILED(result))
+    {
+        skip("No IPin\n");
+        goto out_unknown;
+    }
+
+    result = IPin_EnumMediaTypes(pin, &enum_media_types);
+    ok(S_OK == result, "got 0x%08x\n", result);
+    if (FAILED(result))
+        goto out_pin;
+
+    FillMemory(&media_type, sizeof(media_type), 0x55);
+    result = IEnumMediaTypes_Next(enum_media_types, 1, &media_type, NULL);
+    ok(S_OK == result, "got 0x%08x\n", result);
+    if (FAILED(result))
+        goto out_enum_media_types;
+
+    ok(IsEqualGUID(&media_type->majortype, &MEDIATYPE_Video), "got %s\n", wine_dbgstr_guid(&media_type->majortype));
+    ok(IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB8), "got %s\n", wine_dbgstr_guid(&media_type->subtype));
+    ok(TRUE == media_type->bFixedSizeSamples, "got %u\n", media_type->bFixedSizeSamples);
+    ok(FALSE == media_type->bTemporalCompression, "got %u\n", media_type->bTemporalCompression);
+    ok(IsEqualGUID(&media_type->formattype, &GUID_NULL), "got %s\n", wine_dbgstr_guid(&media_type->formattype));
+
+    DeleteMediaType(media_type);
+
+    result = IEnumMediaTypes_Next(enum_media_types, 1, &media_type, NULL);
+    ok(S_FALSE == result, "got 0x%08x\n", result);
+
+out_enum_media_types:
+    IEnumMediaTypes_Release(enum_media_types);
+
+out_pin:
+    IPin_Release(pin);
+
+out_unknown:
+    IUnknown_Release(unknown);
+}
+
 START_TEST(amstream)
 {
     HANDLE file;
@@ -929,6 +999,7 @@ START_TEST(amstream)
     test_audiodata_set_format();
 
     test_directdrawstream_query_interface();
+    test_directdrawstream_enum_media_types();
 
     CoUninitialize();
 }
