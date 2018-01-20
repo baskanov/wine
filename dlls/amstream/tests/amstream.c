@@ -1402,6 +1402,54 @@ out_unknown:
     IUnknown_Release(unknown);
 }
 
+static IUnknown *create_audio_stream(void)
+{
+    IUnknown *audio_stream = NULL;
+    HRESULT result = CoCreateInstance(&CLSID_AMAudioStream, NULL, CLSCTX_INPROC_SERVER,
+            &IID_IUnknown, (void **)&audio_stream);
+    ok(S_OK == result, "got 0x%08x\n", result);
+    return audio_stream;
+}
+
+static void test_audiostream_query_interface(void)
+{
+    IUnknown *unknown = create_audio_stream();
+    IMediaStream *media_stream = NULL;
+    IAMMediaStream *am_media_stream = NULL;
+    IAudioMediaStream *audio_media_stream = NULL;
+    IPin *pin = NULL;
+    IMemInputPin *mem_input_pin = NULL;
+
+    HRESULT result;
+
+    result = IUnknown_QueryInterface(unknown, &IID_IMediaStream, (void **)&media_stream);
+    ok(S_OK == result, "got 0x%08x\n", result);
+    if (S_OK == result)
+        IMediaStream_Release(media_stream);
+
+    result = IUnknown_QueryInterface(unknown, &IID_IAMMediaStream, (void **)&am_media_stream);
+    ok(S_OK == result, "got 0x%08x\n", result);
+    if (S_OK == result)
+        IAMMediaStream_Release(am_media_stream);
+
+    result = IUnknown_QueryInterface(unknown, &IID_IAudioMediaStream, (void **)&audio_media_stream);
+    ok(S_OK == result, "got 0x%08x\n", result);
+    if (S_OK == result)
+        IAudioMediaStream_Release(audio_media_stream);
+
+    result = IUnknown_QueryInterface(unknown, &IID_IPin, (void **)&pin);
+    todo_wine ok(S_OK == result, "got 0x%08x\n", result);
+    if (S_OK == result)
+        IPin_Release(pin);
+
+    result = IUnknown_QueryInterface(unknown, &IID_IMemInputPin, (void **)&mem_input_pin);
+    todo_wine ok(S_OK == result, "got 0x%08x\n", result);
+    if (S_OK == result)
+        IMemInputPin_Release(mem_input_pin);
+
+    IUnknown_Release(unknown);
+}
+
 START_TEST(amstream)
 {
     HANDLE file;
@@ -1430,6 +1478,8 @@ START_TEST(amstream)
     test_directdrawstream_query_interface();
     test_directdrawstream_enum_media_types();
     test_directdrawstream_receive_connection();
+
+    test_audiostream_query_interface();
 
     CoUninitialize();
 }
