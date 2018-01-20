@@ -19,10 +19,10 @@
  */
 
 #define COBJMACROS
+#define INITGUID
 
 #include "wine/test.h"
-#include "initguid.h"
-#include "uuids.h"
+#include "dshow.h"
 #include "amstream.h"
 #include "vfwmsgs.h"
 #include "mmreg.h"
@@ -973,6 +973,435 @@ out_unknown:
     IUnknown_Release(unknown);
 }
 
+typedef struct
+{
+    IBaseFilter IBaseFilter_iface;
+
+    LONG ref;
+} MockFilter;
+
+static inline MockFilter *impl_from_IBaseFilter(IBaseFilter *iface)
+{
+    return CONTAINING_RECORD(iface, MockFilter, IBaseFilter_iface);
+}
+
+/*** IUnknown methods ***/
+
+static HRESULT WINAPI MockFilter_IBaseFilter_QueryInterface(IBaseFilter *iface, REFIID riid, void **ret_iface)
+{
+    *ret_iface = NULL;
+
+    if (IsEqualIID(riid, &IID_IUnknown) ||
+        IsEqualIID(riid, &IID_IPersist) ||
+        IsEqualIID(riid, &IID_IMediaFilter) ||
+        IsEqualIID(riid, &IID_IBaseFilter))
+        *ret_iface = iface;
+
+    if (*ret_iface)
+    {
+        IBaseFilter_AddRef(iface);
+        return S_OK;
+    }
+
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI MockFilter_IBaseFilter_AddRef(IBaseFilter *iface)
+{
+    MockFilter *This = impl_from_IBaseFilter(iface);
+    ULONG ref = InterlockedIncrement(&This->ref);
+
+    return ref;
+}
+
+static ULONG WINAPI MockFilter_IBaseFilter_Release(IBaseFilter *iface)
+{
+    MockFilter *This = impl_from_IBaseFilter(iface);
+    ULONG ref = InterlockedDecrement(&This->ref);
+
+    return ref;
+}
+
+/*** IPersist methods ***/
+
+static HRESULT WINAPI MockFilter_IBaseFilter_GetClassID(IBaseFilter *iface, CLSID *clsid)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+/*** IBaseFilter methods ***/
+
+static HRESULT WINAPI MockFilter_IBaseFilter_Stop(IBaseFilter *iface)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockFilter_IBaseFilter_Pause(IBaseFilter *iface)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockFilter_IBaseFilter_Run(IBaseFilter *iface, REFERENCE_TIME start)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockFilter_IBaseFilter_GetState(IBaseFilter *iface, DWORD ms_timeout, FILTER_STATE *state)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockFilter_IBaseFilter_SetSyncSource(IBaseFilter *iface, IReferenceClock *clock)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockFilter_IBaseFilter_GetSyncSource(IBaseFilter *iface, IReferenceClock **clock)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockFilter_IBaseFilter_EnumPins(IBaseFilter *iface, IEnumPins **enum_pins)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockFilter_IBaseFilter_FindPin(IBaseFilter *iface, LPCWSTR id, IPin **pin)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockFilter_IBaseFilter_QueryFilterInfo(IBaseFilter *iface, FILTER_INFO *info)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockFilter_IBaseFilter_JoinFilterGraph(IBaseFilter *iface, IFilterGraph *graph, LPCWSTR name)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockFilter_IBaseFilter_QueryVendorInfo(IBaseFilter *iface, LPWSTR *vendor_info)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static struct IBaseFilterVtbl MockFilter_Vtbl =
+{
+    MockFilter_IBaseFilter_QueryInterface,
+    MockFilter_IBaseFilter_AddRef,
+    MockFilter_IBaseFilter_Release,
+    MockFilter_IBaseFilter_GetClassID,
+    MockFilter_IBaseFilter_Stop,
+    MockFilter_IBaseFilter_Pause,
+    MockFilter_IBaseFilter_Run,
+    MockFilter_IBaseFilter_GetState,
+    MockFilter_IBaseFilter_SetSyncSource,
+    MockFilter_IBaseFilter_GetSyncSource,
+    MockFilter_IBaseFilter_EnumPins,
+    MockFilter_IBaseFilter_FindPin,
+    MockFilter_IBaseFilter_QueryFilterInfo,
+    MockFilter_IBaseFilter_JoinFilterGraph,
+    MockFilter_IBaseFilter_QueryVendorInfo,
+};
+
+typedef struct
+{
+    IPin IPin_iface;
+
+    LONG ref;
+
+    IBaseFilter *filter;
+} MockOutputPin;
+
+static inline MockOutputPin *impl_from_IPin(IPin *iface)
+{
+    return CONTAINING_RECORD(iface, MockOutputPin, IPin_iface);
+}
+
+/*** IUnknown methods ***/
+
+static HRESULT WINAPI MockOutputPin_IPin_QueryInterface(IPin *iface, REFIID riid, void **ret_iface)
+{
+    if (IsEqualGUID(riid, &IID_IUnknown) ||
+        IsEqualGUID(riid, &IID_IPin))
+    {
+        IPin_AddRef(iface);
+        *ret_iface = iface;
+        return S_OK;
+    }
+
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI MockOutputPin_IPin_AddRef(IPin *iface)
+{
+    MockOutputPin *This = impl_from_IPin(iface);
+    ULONG ref = InterlockedIncrement(&This->ref);
+
+    return ref;
+}
+
+static ULONG WINAPI MockOutputPin_IPin_Release(IPin *iface)
+{
+    MockOutputPin *This = impl_from_IPin(iface);
+    ULONG ref = InterlockedDecrement(&This->ref);
+
+    return ref;
+}
+
+/*** IPin methods ***/
+
+static HRESULT WINAPI MockOutputPin_IPin_Connect(IPin *iface, IPin *receive_pin, const AM_MEDIA_TYPE *media_type)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_ReceiveConnection(IPin *iface, IPin *connector, const AM_MEDIA_TYPE *media_type)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_Disconnect(IPin *iface)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_ConnectedTo(IPin *iface, IPin **pin)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_ConnectionMediaType(IPin *iface, AM_MEDIA_TYPE *media_type)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_QueryPinInfo(IPin *iface, PIN_INFO *info)
+{
+    MockOutputPin *This = impl_from_IPin(iface);
+
+    if (!info)
+        return E_POINTER;
+
+    info->pFilter = This->filter;
+    IBaseFilter_AddRef(info->pFilter);
+    info->dir = PINDIR_OUTPUT;
+    info->achName[0] = '\0';
+
+    return S_OK;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_QueryDirection(IPin *iface, PIN_DIRECTION *direction)
+{
+    *direction = PINDIR_OUTPUT;
+    return S_OK;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_QueryId(IPin *iface, LPWSTR *id)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_QueryAccept(IPin *iface, const AM_MEDIA_TYPE *media_type)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_EnumMediaTypes(IPin *iface, IEnumMediaTypes **enum_media_types)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_QueryInternalConnections(IPin *iface, IPin **pins, ULONG *pin_count)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_EndOfStream(IPin *iface)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_BeginFlush(IPin *iface)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_EndFlush(IPin *iface)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI MockOutputPin_IPin_NewSegment(IPin *iface, REFERENCE_TIME start, REFERENCE_TIME stop, double rate)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static struct IPinVtbl MockOutputPin_Vtbl =
+{
+    MockOutputPin_IPin_QueryInterface,
+    MockOutputPin_IPin_AddRef,
+    MockOutputPin_IPin_Release,
+    MockOutputPin_IPin_Connect,
+    MockOutputPin_IPin_ReceiveConnection,
+    MockOutputPin_IPin_Disconnect,
+    MockOutputPin_IPin_ConnectedTo,
+    MockOutputPin_IPin_ConnectionMediaType,
+    MockOutputPin_IPin_QueryPinInfo,
+    MockOutputPin_IPin_QueryDirection,
+    MockOutputPin_IPin_QueryId,
+    MockOutputPin_IPin_QueryAccept,
+    MockOutputPin_IPin_EnumMediaTypes,
+    MockOutputPin_IPin_QueryInternalConnections,
+    MockOutputPin_IPin_EndOfStream,
+    MockOutputPin_IPin_BeginFlush,
+    MockOutputPin_IPin_EndFlush,
+    MockOutputPin_IPin_NewSegment,
+};
+
+static void test_directdrawstream_receive_connection(void)
+{
+    IUnknown *unknown = create_directdraw_stream();
+    IPin *pin = NULL;
+    MockFilter filter;
+    MockOutputPin output_pin;
+    struct
+    {
+        VIDEOINFOHEADER header;
+        union
+        {
+            RGBQUAD colors[256];
+            DWORD bitfields[3];
+        } colors;
+    } video_info = { 0 };
+    AM_MEDIA_TYPE media_type = { 0 };
+
+    HRESULT result;
+
+    result = IUnknown_QueryInterface(unknown, &IID_IPin, (void **)&pin);
+    if (FAILED(result))
+    {
+        skip("No IPin\n");
+        goto out_unknown;
+    }
+
+    SetRect(&video_info.header.rcSource, 0, 0, 640, 480);
+    SetRect(&video_info.header.rcTarget, 0, 0, 640, 480);
+    video_info.header.bmiHeader.biSize = sizeof(video_info.header.bmiHeader);
+    video_info.header.bmiHeader.biWidth = 640;
+    video_info.header.bmiHeader.biHeight = 480;
+    video_info.header.bmiHeader.biPlanes = 1;
+
+    media_type.majortype = MEDIATYPE_Video;
+    media_type.bFixedSizeSamples = TRUE;
+    media_type.bTemporalCompression = FALSE;
+    media_type.formattype = FORMAT_VideoInfo;
+    media_type.cbFormat = sizeof(video_info);
+    media_type.pbFormat = (BYTE *)&video_info;
+
+    filter.IBaseFilter_iface.lpVtbl = &MockFilter_Vtbl;
+    filter.ref = 1;
+
+    output_pin.IPin_iface.lpVtbl = &MockOutputPin_Vtbl;
+    output_pin.ref = 1;
+    output_pin.filter = &filter.IBaseFilter_iface;
+
+#define CHECK_MEDIA_TYPE(media_type, expected_result) do { \
+    HRESULT result; \
+    result = IPin_ReceiveConnection(pin, &output_pin.IPin_iface, media_type); \
+    ok(expected_result == result, "got 0x%08x\n", result); \
+    if (SUCCEEDED(result)) \
+        IPin_Disconnect(pin); \
+} while (0)
+
+    video_info.header.bmiHeader.biBitCount = 8;
+    video_info.header.bmiHeader.biCompression = BI_RGB;
+    media_type.subtype = MEDIASUBTYPE_RGB8;
+    media_type.lSampleSize = 640 * 480;
+    CHECK_MEDIA_TYPE(&media_type, S_OK);
+
+    video_info.header.bmiHeader.biBitCount = 16;
+    video_info.header.bmiHeader.biCompression = BI_BITFIELDS;
+    video_info.colors.bitfields[0] = 0x7c00;
+    video_info.colors.bitfields[1] = 0x03e0;
+    video_info.colors.bitfields[2] = 0x001f;
+    media_type.subtype = MEDIASUBTYPE_RGB555;
+    media_type.lSampleSize = 640 * 480 * 2;
+    CHECK_MEDIA_TYPE(&media_type, S_OK);
+
+    video_info.header.bmiHeader.biBitCount = 16;
+    video_info.header.bmiHeader.biCompression = BI_BITFIELDS;
+    video_info.colors.bitfields[0] = 0xf800;
+    video_info.colors.bitfields[1] = 0x07e0;
+    video_info.colors.bitfields[2] = 0x001f;
+    media_type.subtype = MEDIASUBTYPE_RGB565;
+    media_type.lSampleSize = 640 * 480 * 2;
+    CHECK_MEDIA_TYPE(&media_type, S_OK);
+
+    video_info.header.bmiHeader.biBitCount = 24;
+    video_info.header.bmiHeader.biCompression = BI_RGB;
+    media_type.subtype = MEDIASUBTYPE_RGB24;
+    media_type.lSampleSize = 640 * 480 * 3;
+    CHECK_MEDIA_TYPE(&media_type, S_OK);
+
+    video_info.header.bmiHeader.biBitCount = 32;
+    video_info.header.bmiHeader.biCompression = BI_RGB;
+    media_type.subtype = MEDIASUBTYPE_RGB32;
+    media_type.lSampleSize = 640 * 480 * 4;
+    CHECK_MEDIA_TYPE(&media_type, S_OK);
+
+    video_info.header.bmiHeader.biBitCount = 1;
+    video_info.header.bmiHeader.biCompression = BI_RGB;
+    media_type.subtype = MEDIASUBTYPE_RGB1;
+    media_type.lSampleSize = 640 * 480 / 8;
+    CHECK_MEDIA_TYPE(&media_type, VFW_E_TYPE_NOT_ACCEPTED);
+
+    video_info.header.bmiHeader.biBitCount = 4;
+    video_info.header.bmiHeader.biCompression = BI_RGB;
+    media_type.subtype = MEDIASUBTYPE_RGB4;
+    media_type.lSampleSize = 640 * 480 / 2;
+    CHECK_MEDIA_TYPE(&media_type, VFW_E_TYPE_NOT_ACCEPTED);
+
+    video_info.header.bmiHeader.biBitCount = 16;
+    video_info.header.bmiHeader.biCompression = MAKEFOURCC('U', 'Y', 'V', 'Y');
+    media_type.subtype = MEDIASUBTYPE_UYVY;
+    media_type.lSampleSize = 640 * 480 * 2;
+    CHECK_MEDIA_TYPE(&media_type, VFW_E_TYPE_NOT_ACCEPTED);
+
+#undef CHECK_MEDIA_TYPE
+
+    IPin_Release(pin);
+
+out_unknown:
+    IUnknown_Release(unknown);
+}
+
 START_TEST(amstream)
 {
     HANDLE file;
@@ -1000,6 +1429,7 @@ START_TEST(amstream)
 
     test_directdrawstream_query_interface();
     test_directdrawstream_enum_media_types();
+    test_directdrawstream_receive_connection();
 
     CoUninitialize();
 }
