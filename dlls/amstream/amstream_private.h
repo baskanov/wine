@@ -39,6 +39,7 @@ HRESULT MediaStreamFilter_create(IUnknown *pUnkOuter, LPVOID *ppObj) DECLSPEC_HI
 HRESULT AMDirectDrawStream_create(IUnknown *outer, void **obj) DECLSPEC_HIDDEN;
 HRESULT ddrawmediastream_create(IMultiMediaStream *Parent, const MSPID *pPurposeId,
         STREAM_TYPE StreamType, IAMMediaStream **ppMediaStream) DECLSPEC_HIDDEN;
+HRESULT AMAudioStream_create(IUnknown *outer, void **obj) DECLSPEC_HIDDEN;
 HRESULT audiomediastream_create(IMultiMediaStream *parent, const MSPID *purpose_id,
         STREAM_TYPE stream_type, IAMMediaStream **media_stream) DECLSPEC_HIDDEN;
 

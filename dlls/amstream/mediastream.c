@@ -1014,12 +1014,14 @@ static const struct IAudioMediaStreamVtbl AudioMediaStreamImpl_IAudioMediaStream
     AudioMediaStreamImpl_IAudioMediaStream_CreateSample
 };
 
-HRESULT audiomediastream_create(IMultiMediaStream *parent, const MSPID *purpose_id,
-        STREAM_TYPE stream_type, IAMMediaStream **media_stream)
+HRESULT AMAudioStream_create(IUnknown *outer, void **obj)
 {
     AudioMediaStreamImpl *object;
 
-    TRACE("(%p,%s,%p)\n", parent, debugstr_guid(purpose_id), media_stream);
+    TRACE("(%p,%p)\n", outer, obj);
+
+    if (outer)
+        return CLASS_E_NOAGGREGATION;
 
     object = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(AudioMediaStreamImpl));
     if (!object)
@@ -1029,13 +1031,40 @@ HRESULT audiomediastream_create(IMultiMediaStream *parent, const MSPID *purpose_
     object->IAudioMediaStream_iface.lpVtbl = &AudioMediaStreamImpl_IAudioMediaStream_Vtbl;
     object->ref = 1;
 
+    *obj = &object->IAMMediaStream_iface;
+
+    return S_OK;
+}
+
+HRESULT audiomediastream_create(IMultiMediaStream *parent, const MSPID *purpose_id,
+        STREAM_TYPE stream_type, IAMMediaStream **media_stream)
+{
+    HRESULT hr;
+    IUnknown *unknown;
+    AudioMediaStreamImpl *object;
+
+    TRACE("(%p,%s,%p)\n", parent, debugstr_guid(purpose_id), media_stream);
+
+    hr = AMAudioStream_create(NULL, (void **)&unknown);
+    if (FAILED(hr))
+        return hr;
+
+    hr = IUnknown_QueryInterface(unknown, &IID_IAMMediaStream, (void **)media_stream);
+    if (FAILED(hr))
+        goto out_unknown;
+
+    object = impl_from_AudioMediaStream_IAMMediaStream(*media_stream);
+
     object->parent = parent;
     object->purpose_id = *purpose_id;
     object->stream_type = stream_type;
 
-    *media_stream = &object->IAMMediaStream_iface;
+    hr = S_OK;
 
-    return S_OK;
+out_unknown:
+    IUnknown_Release(unknown);
+
+    return hr;
 }
 
 typedef struct {
