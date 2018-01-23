@@ -1071,9 +1071,38 @@ static HRESULT WINAPI AudioMediaStreamInputPin_GetMediaType(BasePin *base, int i
 {
     AudioMediaStreamInputPin *This = impl_from_AudioMediaStreamInputPin_IPin(&base->IPin_iface);
 
-    FIXME("(%p)->(%d,%p) stub!\n", This, index, media_type);
+    WAVEFORMATEX *format = NULL;
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%d,%p)\n", This, index, media_type);
+
+    if(index < 0)
+        return E_INVALIDARG;
+    if (index > 0)
+        return VFW_S_NO_MORE_ITEMS;
+
+    format = (WAVEFORMATEX *)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
+    if (!format)
+        return E_OUTOFMEMORY;
+
+    format->wFormatTag = WAVE_FORMAT_PCM;
+    format->nChannels = 1;
+    format->nSamplesPerSec = 11025;
+    format->wBitsPerSample = 16;
+    format->cbSize = 0;
+    format->nBlockAlign = format->nChannels * format->wBitsPerSample / 8;
+    format->nAvgBytesPerSec = format->nSamplesPerSec * format->nBlockAlign;
+
+    media_type->majortype = MEDIATYPE_Audio;
+    media_type->subtype = GUID_NULL;
+    media_type->bFixedSizeSamples = TRUE;
+    media_type->bTemporalCompression = FALSE;
+    media_type->lSampleSize = 0;
+    media_type->formattype = FORMAT_WaveFormatEx;
+    media_type->pUnk = NULL;
+    media_type->cbFormat = sizeof(WAVEFORMATEX);
+    media_type->pbFormat = (BYTE *)format;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI AudioMediaStreamInputPin_Receive(BaseInputPin *base, IMediaSample *sample)
