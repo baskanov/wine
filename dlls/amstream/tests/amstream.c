@@ -1450,6 +1450,54 @@ static void test_audiostream_query_interface(void)
     IUnknown_Release(unknown);
 }
 
+static void test_audiostream_enum_media_types(void)
+{
+    IUnknown *unknown = create_audio_stream();
+    IPin *pin = NULL;
+    IEnumMediaTypes *enum_media_types = NULL;
+    AM_MEDIA_TYPE *media_type;
+
+    HRESULT result;
+
+    result = IUnknown_QueryInterface(unknown, &IID_IPin, (void **)&pin);
+    if (FAILED(result))
+    {
+        skip("No IPin\n");
+        goto out_unknown;
+    }
+
+    result = IPin_EnumMediaTypes(pin, &enum_media_types);
+    ok(S_OK == result, "got 0x%08x\n", result);
+    if (FAILED(result))
+        goto out_pin;
+
+    FillMemory(&media_type, sizeof(media_type), 0x55);
+    result = IEnumMediaTypes_Next(enum_media_types, 1, &media_type, NULL);
+    ok(S_OK == result, "got 0x%08x\n", result);
+    if (FAILED(result))
+        goto out_enum_media_types;
+
+    ok(IsEqualGUID(&media_type->majortype, &MEDIATYPE_Audio), "got %s\n", wine_dbgstr_guid(&media_type->majortype));
+    ok(IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_PCM), "got %s\n", wine_dbgstr_guid(&media_type->subtype));
+    ok(TRUE == media_type->bFixedSizeSamples, "got %u\n", media_type->bFixedSizeSamples);
+    ok(FALSE == media_type->bTemporalCompression, "got %u\n", media_type->bTemporalCompression);
+    ok(IsEqualGUID(&media_type->formattype, &GUID_NULL), "got %s\n", wine_dbgstr_guid(&media_type->formattype));
+
+    DeleteMediaType(media_type);
+
+    result = IEnumMediaTypes_Next(enum_media_types, 1, &media_type, NULL);
+    ok(S_FALSE == result, "got 0x%08x\n", result);
+
+out_enum_media_types:
+    IEnumMediaTypes_Release(enum_media_types);
+
+out_pin:
+    IPin_Release(pin);
+
+out_unknown:
+    IUnknown_Release(unknown);
+}
+
 START_TEST(amstream)
 {
     HANDLE file;
@@ -1480,6 +1528,7 @@ START_TEST(amstream)
     test_directdrawstream_receive_connection();
 
     test_audiostream_query_interface();
+    test_audiostream_enum_media_types();
 
     CoUninitialize();
 }
