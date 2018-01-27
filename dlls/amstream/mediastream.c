@@ -1088,9 +1088,18 @@ static HRESULT WINAPI AudioMediaStreamInputPin_CheckMediaType(BasePin *base, con
 {
     AudioMediaStreamInputPin *This = impl_from_AudioMediaStreamInputPin_IPin(&base->IPin_iface);
 
-    FIXME("(%p)->(%p) stub!\n", This, media_type);
+    TRACE("(%p)->(%p)\n", This, media_type);
 
-    return E_NOTIMPL;
+    if (!IsEqualGUID(&media_type->majortype, &MEDIATYPE_Audio))
+        return S_FALSE;
+
+    if (!IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_PCM))
+        return S_FALSE;
+
+    if (!IsEqualGUID(&media_type->formattype, &FORMAT_WaveFormatEx))
+        return S_FALSE;
+
+    return S_OK;
 }
 
 static LONG WINAPI AudioMediaStreamInputPin_GetMediaTypeVersion(BasePin *base)
