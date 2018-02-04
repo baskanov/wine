@@ -379,11 +379,39 @@ static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_GetFormat
         DDSURFACEDESC *current_format, IDirectDrawPalette **palette,
         DDSURFACEDESC *desired_format, DWORD *flags)
 {
-    FIXME("(%p)->(%p,%p,%p,%p) stub!\n", iface, current_format, palette, desired_format,
+    DirectDrawMediaStreamImpl *This = impl_from_IDirectDrawMediaStream(iface);
+    VIDEOINFOHEADER *video_info;
+
+    TRACE("(%p/%p)->(%p,%p,%p,%p)\n", This, iface, current_format, palette, desired_format,
             flags);
 
-    return MS_E_NOSTREAM;
+    if (!This->input_pin->pin.pin.pConnectedTo)
+        return MS_E_NOSTREAM;
 
+    video_info = (VIDEOINFOHEADER *)This->input_pin->pin.pin.mtCurrent.pbFormat;
+
+    if (current_format)
+    {
+        current_format->dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_CAPS;
+        current_format->dwWidth = video_info->bmiHeader.biWidth;
+        current_format->dwHeight = abs(video_info->bmiHeader.biHeight);
+        current_format->ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+    }
+
+    if (palette)
+        *palette = NULL;
+
+    if (desired_format)
+    {
+        desired_format->dwFlags = DDSD_WIDTH | DDSD_HEIGHT;
+        desired_format->dwWidth = video_info->bmiHeader.biWidth;
+        desired_format->dwHeight = abs(video_info->bmiHeader.biHeight);
+    }
+
+    if (flags)
+        *flags = 0;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_SetFormat(IDirectDrawMediaStream *iface,
