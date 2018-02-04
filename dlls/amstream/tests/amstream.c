@@ -51,6 +51,26 @@ static const AM_MEDIA_TYPE audio_mt =
     .pbFormat = (BYTE *)&audio_format,
 };
 
+static const VIDEOINFO rgb32_video_info =
+{
+    .bmiHeader.biSize = sizeof(BITMAPINFOHEADER),
+    .bmiHeader.biWidth = 333,
+    .bmiHeader.biHeight = -444,
+    .bmiHeader.biPlanes = 1,
+    .bmiHeader.biBitCount = 32,
+    .bmiHeader.biCompression = BI_RGB,
+};
+
+static const AM_MEDIA_TYPE rgb32_mt =
+{
+    /* MEDIATYPE_Video, MEDIASUBTYPE_RGB32, FORMAT_VideoInfo */
+    .majortype = {0x73646976, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}},
+    .subtype = {0xe436eb7e, 0x524f, 0x11ce, {0x9f, 0x53, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70}},
+    .formattype = {0x05589f80, 0xc356, 0x11ce, {0xbf, 0x01, 0x00, 0xaa, 0x00, 0x55, 0x59, 0x5a}},
+    .cbFormat = sizeof(VIDEOINFO),
+    .pbFormat = (BYTE *)&rgb32_video_info,
+};
+
 static const WCHAR primary_video_sink_id[] = L"I{A35FF56A-9FDA-11D0-8FDF-00C04FD9189D}";
 static const WCHAR primary_audio_sink_id[] = L"I{A35FF56B-9FDA-11D0-8FDF-00C04FD9189D}";
 
@@ -4440,6 +4460,120 @@ static void test_ddrawstream_initialize(void)
     ok(!ref, "Got outstanding refcount %d.\n", ref);
 }
 
+static void check_ddrawstream_get_format(IDirectDrawMediaStream *ddraw_stream)
+{
+    DDSURFACEDESC current_format;
+    DDSURFACEDESC desired_format;
+    IDirectDrawPalette *palette;
+    DWORD flags;
+    HRESULT hr;
+
+    memset(&current_format, 0xcc, sizeof(current_format));
+    current_format.dwSize = sizeof(current_format);
+    palette = (IDirectDrawPalette *)0xdeadbeef;
+    memset(&desired_format, 0xcc, sizeof(desired_format));
+    desired_format.dwSize = sizeof(desired_format);
+    flags = 0xdeadbeef;
+    hr = IDirectDrawMediaStream_GetFormat(ddraw_stream, &current_format, &palette, &desired_format, &flags);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(current_format.dwFlags == (DDSD_WIDTH | DDSD_HEIGHT | DDSD_CAPS), "Got flags %#x.\n", current_format.dwFlags);
+    ok(current_format.dwWidth == 333, "Got width %u.\n", current_format.dwWidth);
+    ok(current_format.dwHeight == 444, "Got height %u.\n", current_format.dwHeight);
+    ok(current_format.ddsCaps.dwCaps == (DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY),
+            "Got caps %#x.\n", current_format.ddsCaps.dwCaps);
+    ok(palette == NULL, "Got palette %p.\n", palette);
+    ok(desired_format.dwFlags == (DDSD_WIDTH | DDSD_HEIGHT), "Got flags %#x.\n", desired_format.dwFlags);
+    ok(desired_format.dwWidth == 333, "Got width %u.\n", desired_format.dwWidth);
+    ok(desired_format.dwHeight == 444, "Got height %u.\n", desired_format.dwHeight);
+    ok(flags == 0, "Got flags %#x.\n", flags);
+}
+
+static void test_ddrawstream_get_format(void)
+{
+    IAMMultiMediaStream *mmstream = create_ammultimediastream();
+    IDirectDrawMediaStream *ddraw_stream;
+    DDSURFACEDESC current_format;
+    DDSURFACEDESC desired_format;
+    IDirectDrawPalette *palette;
+    struct testfilter source;
+    IGraphBuilder *graph;
+    IMediaStream *stream;
+    VIDEOINFO video_info;
+    AM_MEDIA_TYPE mt;
+    DWORD flags;
+    HRESULT hr;
+    ULONG ref;
+    IPin *pin;
+
+    hr = IAMMultiMediaStream_AddMediaStream(mmstream, NULL, &MSPID_PrimaryVideo, 0, &stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IMediaStream_QueryInterface(stream, &IID_IDirectDrawMediaStream, (void **)&ddraw_stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IMediaStream_QueryInterface(stream, &IID_IPin, (void **)&pin);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMultiMediaStream_GetFilterGraph(mmstream, &graph);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(!!graph, "Expected non-NULL graph.\n");
+
+    testfilter_init(&source);
+
+    hr = IGraphBuilder_AddFilter(graph, &source.filter.IBaseFilter_iface, L"source");
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    current_format.dwSize = sizeof(current_format);
+    desired_format.dwSize = sizeof(desired_format);
+    hr = IDirectDrawMediaStream_GetFormat(ddraw_stream, &current_format, &palette, &desired_format, &flags);
+    ok(hr == MS_E_NOSTREAM, "Got hr %#x.\n", hr);
+
+    video_info = rgb32_video_info;
+    video_info.rcSource.right = 222;
+    video_info.rcSource.bottom = 333;
+    video_info.rcTarget.right = 444;
+    video_info.rcTarget.bottom = 666;
+    mt = rgb32_mt;
+    mt.pbFormat = (BYTE *)&video_info;
+    hr = IGraphBuilder_ConnectDirect(graph, &source.source.pin.IPin_iface, pin, &mt);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    check_ddrawstream_get_format(ddraw_stream);
+
+    hr = IGraphBuilder_Disconnect(graph, pin);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IGraphBuilder_Disconnect(graph, &source.source.pin.IPin_iface);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    video_info = rgb32_video_info;
+    video_info.bmiHeader.biHeight = 444;
+    mt = rgb32_mt;
+    mt.pbFormat = (BYTE *)&video_info;
+    hr = IGraphBuilder_ConnectDirect(graph, &source.source.pin.IPin_iface, pin, &mt);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    check_ddrawstream_get_format(ddraw_stream);
+
+    hr = IGraphBuilder_Disconnect(graph, pin);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IGraphBuilder_Disconnect(graph, &source.source.pin.IPin_iface);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    current_format.dwSize = sizeof(current_format);
+    desired_format.dwSize = sizeof(desired_format);
+    hr = IDirectDrawMediaStream_GetFormat(ddraw_stream, &current_format, &palette, &desired_format, &flags);
+    ok(hr == MS_E_NOSTREAM, "Got hr %#x.\n", hr);
+
+    ref = IAMMultiMediaStream_Release(mmstream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IGraphBuilder_Release(graph);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    IPin_Release(pin);
+    IDirectDrawMediaStream_Release(ddraw_stream);
+    ref = IMediaStream_Release(stream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IBaseFilter_Release(&source.filter.IBaseFilter_iface);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+}
+
 static void check_ammediastream_join_am_multi_media_stream(const CLSID *clsid)
 {
     IAMMultiMediaStream *mmstream = create_ammultimediastream();
@@ -5844,6 +5978,7 @@ START_TEST(amstream)
     test_ddrawstream_getsetdirectdraw();
     test_ddrawstream_receive_connection();
     test_ddrawstream_create_sample();
+    test_ddrawstream_get_format();
 
     test_ddrawstreamsample_get_media_stream();
 
