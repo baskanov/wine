@@ -58,6 +58,7 @@ typedef struct DirectDrawMediaStreamImpl {
     IDirectDraw7 *ddraw;
     DirectDrawMediaStreamInputPin *input_pin;
     CRITICAL_SECTION critical_section;
+    FILTER_STATE state;
 } DirectDrawMediaStreamImpl;
 
 static inline DirectDrawMediaStreamImpl *impl_from_DirectDrawMediaStream_IAMMediaStream(IAMMediaStream *iface)
@@ -218,10 +219,34 @@ static HRESULT WINAPI DirectDrawMediaStreamImpl_IAMMediaStream_Initialize(IAMMed
 static HRESULT WINAPI DirectDrawMediaStreamImpl_IAMMediaStream_SetState(IAMMediaStream *iface, FILTER_STATE state)
 {
     DirectDrawMediaStreamImpl *This = impl_from_DirectDrawMediaStream_IAMMediaStream(iface);
+    HRESULT hr = S_OK;
 
-    FIXME("(%p/%p)->(%u) stub!\n", This, iface, state);
+    TRACE("(%p/%p)->(%u)\n", This, iface, state);
 
-    return S_FALSE;
+    EnterCriticalSection(&This->critical_section);
+    if (This->state == state)
+        goto out_critical_section;
+
+    switch (state)
+    {
+    case State_Stopped:
+        break;
+    case State_Paused:
+    case State_Running:
+        if (State_Stopped == This->state)
+            This->input_pin->pin.end_of_stream = FALSE;
+        break;
+    default:
+        hr = E_INVALIDARG;
+        goto out_critical_section;
+    }
+
+    This->state = state;
+
+out_critical_section:
+    LeaveCriticalSection(&This->critical_section);
+
+    return hr;
 }
 
 static HRESULT WINAPI DirectDrawMediaStreamImpl_IAMMediaStream_JoinAMMultiMediaStream(IAMMediaStream *iface, IAMMultiMediaStream *am_multi_media_stream)
