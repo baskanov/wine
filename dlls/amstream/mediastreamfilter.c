@@ -136,9 +136,24 @@ static HRESULT WINAPI MediaStreamFilterImpl_Stop(IMediaStreamFilter *iface)
 
 static HRESULT WINAPI MediaStreamFilterImpl_Pause(IMediaStreamFilter *iface)
 {
-    FIXME("(%p)->(): Stub!\n", iface);
+    IMediaStreamFilterImpl *This = impl_from_IMediaStreamFilter(iface);
+    ULONG i;
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("(%p)->()\n", iface);
+
+    EnterCriticalSection(&This->filter.csFilter);
+    This->filter.state = State_Paused;
+    LeaveCriticalSection(&This->filter.csFilter);
+
+    for (i = 0; i < This->nb_streams; ++i)
+    {
+        hr = IAMMediaStream_SetState(This->streams[i], State_Paused);
+        if (FAILED(hr))
+            return hr;
+    }
+
+    return S_OK;
 }
 
 static HRESULT WINAPI MediaStreamFilterImpl_Run(IMediaStreamFilter *iface, REFERENCE_TIME start)
