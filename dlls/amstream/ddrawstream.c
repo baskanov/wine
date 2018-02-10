@@ -23,6 +23,7 @@
 #include "amstream_private.h"
 #include "wine/debug.h"
 #include "wine/strmbase.h"
+#include "wine/list.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(amstream);
 
@@ -53,6 +54,16 @@ struct ddraw_stream
     AM_MEDIA_TYPE mt;
     FILTER_STATE state;
     BOOL eos;
+    struct list queue;
+    HANDLE queued_event;
+};
+
+struct ddraw_queue_entry
+{
+    struct list entry;
+    IDirectDrawStreamSample *sample;
+    HRESULT update_result;
+    HANDLE updated_event;
 };
 
 static inline struct ddraw_stream *impl_from_IAMMediaStream(IAMMediaStream *iface)
@@ -118,6 +129,7 @@ static ULONG WINAPI ddraw_IAMMediaStream_Release(IAMMediaStream *iface)
 
     if (!ref)
     {
+        CloseHandle(This->queued_event);
         DeleteCriticalSection(&This->cs);
         if (This->ddraw)
             IDirectDraw7_Release(This->ddraw);
@@ -1019,6 +1031,8 @@ HRESULT ddraw_stream_create(IMultiMediaStream *parent, const MSPID *purpose_id,
     object->parent = parent;
     object->purpose_id = *purpose_id;
     object->stream_type = stream_type;
+    object->queued_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    list_init(&object->queue);
 
     if (stream_object
             && FAILED(hr = IUnknown_QueryInterface(stream_object, &IID_IDirectDraw7, (void **)&object->ddraw)))
@@ -1029,12 +1043,23 @@ HRESULT ddraw_stream_create(IMultiMediaStream *parent, const MSPID *purpose_id,
     return S_OK;
 }
 
+static void ddraw_queue_sample(IDirectDrawMediaStream *iface, struct ddraw_queue_entry *entry)
+{
+    struct ddraw_stream *This = impl_from_IDirectDrawMediaStream(iface);
+
+    EnterCriticalSection(&This->cs);
+    list_add_tail(&This->queue, &entry->entry);
+    SetEvent(This->queued_event);
+    LeaveCriticalSection(&This->cs);
+}
+
 typedef struct {
     IDirectDrawStreamSample IDirectDrawStreamSample_iface;
     LONG ref;
     IDirectDrawMediaStream *parent;
     IDirectDrawSurface *surface;
     RECT rect;
+    struct ddraw_queue_entry entry;
 } IDirectDrawStreamSampleImpl;
 
 static inline IDirectDrawStreamSampleImpl *impl_from_IDirectDrawStreamSample(IDirectDrawStreamSample *iface)
@@ -1082,6 +1107,7 @@ static ULONG WINAPI IDirectDrawStreamSampleImpl_Release(IDirectDrawStreamSample 
 
     if (!ref)
     {
+        CloseHandle(This->entry.updated_event);
         if (This->surface)
             IDirectDrawSurface_Release(This->surface);
         IDirectDrawMediaStream_Release(This->parent);
@@ -1118,9 +1144,15 @@ static HRESULT WINAPI IDirectDrawStreamSampleImpl_SetSampleTimes(IDirectDrawStre
 static HRESULT WINAPI IDirectDrawStreamSampleImpl_Update(IDirectDrawStreamSample *iface, DWORD flags, HANDLE event,
                                                          PAPCFUNC func_APC, DWORD APC_data)
 {
-    FIXME("(%p)->(%x,%p,%p,%u): stub\n", iface, flags, event, func_APC, APC_data);
+    IDirectDrawStreamSampleImpl *This = impl_from_IDirectDrawStreamSample(iface);
 
-    return S_OK;
+    TRACE("(%p)->(%x,%p,%p,%u)\n", iface, flags, event, func_APC, APC_data);
+
+    ddraw_queue_sample(This->parent, &This->entry);
+
+    WaitForSingleObject(This->entry.updated_event, INFINITE);
+
+    return This->entry.update_result;
 }
 
 static HRESULT WINAPI IDirectDrawStreamSampleImpl_CompletionStatus(IDirectDrawStreamSample *iface, DWORD flags, DWORD milliseconds)
@@ -1242,6 +1274,9 @@ static HRESULT ddrawstreamsample_create(IDirectDrawMediaStream *parent, IDirectD
         if (hr == S_OK)
             SetRect(&object->rect, 0, 0, desc.dwWidth, desc.dwHeight);
     }
+
+    object->entry.sample = &object->IDirectDrawStreamSample_iface;
+    object->entry.updated_event = CreateEventW(NULL, FALSE, FALSE, NULL);
 
     *ddraw_stream_sample = &object->IDirectDrawStreamSample_iface;
 
