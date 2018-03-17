@@ -91,6 +91,7 @@ static ULONG WINAPI MediaStreamFilterImpl_Release(IMediaStreamFilter *iface)
         ULONG i;
         for (i = 0; i < This->nb_streams; i++)
         {
+            IAMMediaStream_JoinFilterGraph(This->streams[i], NULL);
             IAMMediaStream_JoinFilter(This->streams[i], NULL);
             IAMMediaStream_Release(This->streams[i]);
         }
@@ -218,7 +219,29 @@ static HRESULT WINAPI MediaStreamFilterImpl_QueryFilterInfo(IMediaStreamFilter *
 static HRESULT WINAPI MediaStreamFilterImpl_JoinFilterGraph(IMediaStreamFilter *iface, IFilterGraph *graph, LPCWSTR name)
 {
     IMediaStreamFilterImpl *This = impl_from_IMediaStreamFilter(iface);
-    return BaseFilterImpl_JoinFilterGraph(&This->filter.IBaseFilter_iface, graph, name);
+    ULONG joined_count;
+    HRESULT hr;
+
+    TRACE("(%p)->(%p,%s)\n", iface, graph, debugstr_w(name));
+
+    for (joined_count = 0; joined_count < This->nb_streams; ++joined_count)
+    {
+        hr = IAMMediaStream_JoinFilterGraph(This->streams[joined_count], graph);
+        if (FAILED(hr))
+            goto out_stream_join;
+    }
+
+    hr = BaseFilterImpl_JoinFilterGraph(&This->filter.IBaseFilter_iface, graph, name);
+    if (FAILED(hr))
+        goto out_stream_join;
+
+    return S_OK;
+
+out_stream_join:
+    for (; joined_count > 0; --joined_count)
+        IAMMediaStream_JoinFilterGraph(This->streams[joined_count - 1], This->filter.filterInfo.pGraph);
+
+    return hr;
 }
 
 static HRESULT WINAPI MediaStreamFilterImpl_QueryVendorInfo(IMediaStreamFilter *iface, LPWSTR *vendor_info)
@@ -245,6 +268,13 @@ static HRESULT WINAPI MediaStreamFilterImpl_AddMediaStream(IMediaStreamFilter* i
     hr = IAMMediaStream_JoinFilter(pAMMediaStream, iface);
     if (FAILED(hr))
         return hr;
+
+    hr = IAMMediaStream_JoinFilterGraph(pAMMediaStream, This->filter.filterInfo.pGraph);
+    if (FAILED(hr))
+    {
+        IAMMediaStream_JoinFilter(pAMMediaStream, NULL);
+        return hr;
+    }
 
     This->streams[This->nb_streams] = pAMMediaStream;
     This->nb_streams++;
