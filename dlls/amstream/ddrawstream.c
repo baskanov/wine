@@ -48,6 +48,7 @@ struct ddraw_stream
     IDirectDraw7 *ddraw;
     CRITICAL_SECTION cs;
     IMediaStreamFilter *filter;
+    IFilterGraph *graph;
 
     IPin *peer;
     IMemAllocator *allocator;
@@ -278,9 +279,11 @@ static HRESULT WINAPI ddraw_IAMMediaStream_JoinFilterGraph(IAMMediaStream *iface
 {
     struct ddraw_stream *This = impl_from_IAMMediaStream(iface);
 
-    FIXME("(%p/%p)->(%p) stub!\n", This, iface, filtergraph);
+    TRACE("(%p/%p)->(%p)\n", This, iface, filtergraph);
 
-    return S_FALSE;
+    This->graph = filtergraph;
+
+    return S_OK;
 }
 
 static const struct IAMMediaStreamVtbl ddraw_IAMMediaStream_vtbl =
