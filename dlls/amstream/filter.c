@@ -223,6 +223,7 @@ static ULONG WINAPI filter_Release(IMediaStreamFilter *iface)
     {
         for (i = 0; i < filter->nb_streams; ++i)
         {
+            IAMMediaStream_JoinFilterGraph(filter->streams[i], NULL);
             IAMMediaStream_JoinFilter(filter->streams[i], NULL);
             IAMMediaStream_Release(filter->streams[i]);
         }
@@ -455,6 +456,7 @@ static HRESULT WINAPI filter_JoinFilterGraph(IMediaStreamFilter *iface,
         IFilterGraph *graph, const WCHAR *name)
 {
     struct filter *filter = impl_from_IMediaStreamFilter(iface);
+    ULONG i;
 
     TRACE("iface %p, graph %p, name.%s.\n", iface, graph, debugstr_w(name));
 
@@ -465,6 +467,9 @@ static HRESULT WINAPI filter_JoinFilterGraph(IMediaStreamFilter *iface,
     else
         filter->name[0] = 0;
     filter->graph = graph;
+
+    for (i = 0; i < filter->nb_streams; ++i)
+        IAMMediaStream_JoinFilterGraph(filter->streams[i], graph);
 
     LeaveCriticalSection(&filter->cs);
 
@@ -495,6 +500,13 @@ static HRESULT WINAPI filter_AddMediaStream(IMediaStreamFilter *iface, IAMMediaS
     hr = IAMMediaStream_JoinFilter(pAMMediaStream, iface);
     if (FAILED(hr))
         return hr;
+
+    hr = IAMMediaStream_JoinFilterGraph(pAMMediaStream, This->graph);
+    if (FAILED(hr))
+    {
+        IAMMediaStream_JoinFilter(pAMMediaStream, NULL);
+        return hr;
+    }
 
     This->streams[This->nb_streams] = pAMMediaStream;
     This->nb_streams++;
