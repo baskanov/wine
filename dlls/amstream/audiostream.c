@@ -181,6 +181,7 @@ struct audio_stream
     STREAM_TYPE stream_type;
     CRITICAL_SECTION cs;
     IMediaStreamFilter *filter;
+    IFilterGraph *graph;
 
     IPin *peer;
     IMemAllocator *allocator;
@@ -373,9 +374,11 @@ static HRESULT WINAPI audio_IAMMediaStream_JoinFilterGraph(IAMMediaStream *iface
 {
     struct audio_stream *This = impl_from_IAMMediaStream(iface);
 
-    FIXME("(%p/%p)->(%p) stub!\n", This, iface, filtergraph);
+    TRACE("(%p/%p)->(%p)\n", This, iface, filtergraph);
 
-    return S_FALSE;
+    This->graph = filtergraph;
+
+    return S_OK;
 }
 
 static const struct IAMMediaStreamVtbl audio_IAMMediaStream_vtbl =
