@@ -58,6 +58,7 @@ typedef struct DirectDrawMediaStreamImpl {
     STREAM_TYPE stream_type;
     IDirectDraw7 *ddraw;
     DirectDrawMediaStreamInputPin *input_pin;
+    IFilterGraph *graph;
     CRITICAL_SECTION critical_section;
     FILTER_STATE state;
     struct list sample_queue;
@@ -276,9 +277,11 @@ static HRESULT WINAPI DirectDrawMediaStreamImpl_IAMMediaStream_JoinFilterGraph(I
 {
     DirectDrawMediaStreamImpl *This = impl_from_DirectDrawMediaStream_IAMMediaStream(iface);
 
-    FIXME("(%p/%p)->(%p) stub!\n", This, iface, filtergraph);
+    TRACE("(%p/%p)->(%p)\n", This, iface, filtergraph);
 
-    return S_FALSE;
+    This->graph = filtergraph;
+
+    return S_OK;
 }
 
 static const struct IAMMediaStreamVtbl DirectDrawMediaStreamImpl_IAMMediaStream_Vtbl =
