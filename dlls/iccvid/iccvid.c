@@ -450,7 +450,7 @@ static void decode_cinepak(cinepak_info *cvinfo, unsigned char *buf, int size,
             break;
         }
 
-    frm_stride = out_width * bpp;
+    frm_stride = (out_width * bpp + 3) & ~3;
     frm_ptr = output;
 
     if(frame.length != size)
