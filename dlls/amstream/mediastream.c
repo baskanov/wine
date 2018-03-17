@@ -737,6 +737,7 @@ typedef struct AudioMediaStreamImpl {
     MSPID purpose_id;
     STREAM_TYPE stream_type;
     AudioMediaStreamInputPin *input_pin;
+    IFilterGraph *graph;
     CRITICAL_SECTION critical_section;
 } AudioMediaStreamImpl;
 
@@ -926,9 +927,11 @@ static HRESULT WINAPI AudioMediaStreamImpl_IAMMediaStream_JoinFilterGraph(IAMMed
 {
     AudioMediaStreamImpl *This = impl_from_AudioMediaStream_IAMMediaStream(iface);
 
-    FIXME("(%p/%p)->(%p) stub!\n", This, iface, filtergraph);
+    TRACE("(%p/%p)->(%p)\n", This, iface, filtergraph);
 
-    return S_FALSE;
+    This->graph = filtergraph;
+
+    return S_OK;
 }
 
 static const struct IAMMediaStreamVtbl AudioMediaStreamImpl_IAMMediaStream_Vtbl =
