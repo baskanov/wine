@@ -2372,6 +2372,8 @@ struct testfilter
     LONGLONG stop_position;
     HRESULT get_duration_hr;
     HRESULT set_positions_hr;
+    HRESULT init_stream_hr;
+    HRESULT cleanup_stream_hr;
 };
 
 static inline struct testfilter *impl_from_BaseFilter(struct strmbase_filter *iface)
@@ -2398,16 +2400,20 @@ static HRESULT testfilter_init_stream(struct strmbase_filter *iface)
 {
     struct testfilter *filter = impl_from_BaseFilter(iface);
 
-    BaseOutputPinImpl_Active(&filter->source);
-    return S_OK;
+    if (SUCCEEDED(filter->init_stream_hr))
+        BaseOutputPinImpl_Active(&filter->source);
+
+    return filter->init_stream_hr;
 }
 
 static HRESULT testfilter_cleanup_stream(struct strmbase_filter *iface)
 {
     struct testfilter *filter = impl_from_BaseFilter(iface);
 
-    BaseOutputPinImpl_Inactive(&filter->source);
-    return S_OK;
+    if (SUCCEEDED(filter->cleanup_stream_hr))
+        BaseOutputPinImpl_Inactive(&filter->source);
+
+    return filter->cleanup_stream_hr;
 }
 
 static const struct strmbase_filter_ops testfilter_ops =
@@ -4883,6 +4889,62 @@ static void test_ddrawstream_getsetdirectdraw(void)
     ok(!ref, "Got outstanding refcount %d.\n", ref);
 }
 
+static void test_mmstream_set_state(void)
+{
+    IAMMultiMediaStream *mmstream = create_ammultimediastream();
+    struct testfilter source;
+    IGraphBuilder *graph;
+    HRESULT hr;
+    ULONG ref;
+
+    hr = IAMMultiMediaStream_Initialize(mmstream, STREAMTYPE_READ, 0, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IAMMultiMediaStream_AddMediaStream(mmstream, NULL, &MSPID_PrimaryAudio, 0, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IAMMultiMediaStream_GetFilterGraph(mmstream, &graph);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(graph != NULL, "Expected non-NULL graph.\n");
+    testfilter_init(&source);
+
+    hr = IGraphBuilder_AddFilter(graph, &source.filter.IBaseFilter_iface, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    source.init_stream_hr = E_FAIL;
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_RUN);
+    ok(hr == E_FAIL, "Got hr %#x.\n", hr);
+    source.init_stream_hr = S_OK;
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_STOP);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    source.init_stream_hr = S_FALSE;
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_RUN);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    source.init_stream_hr = S_OK;
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_STOP);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_RUN);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    source.cleanup_stream_hr = E_FAIL;
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_STOP);
+    ok(hr == E_FAIL, "Got hr %#x.\n", hr);
+    source.cleanup_stream_hr = S_OK;
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_STOP);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_RUN);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    source.cleanup_stream_hr = S_FALSE;
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_STOP);
+    ok(hr == S_FALSE, "Got hr %#x.\n", hr);
+    source.cleanup_stream_hr = S_OK;
+
+    ref = IAMMultiMediaStream_Release(mmstream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IGraphBuilder_Release(graph);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+}
+
 START_TEST(amstream)
 {
     HANDLE file;
@@ -4940,6 +5002,8 @@ START_TEST(amstream)
     test_mediastreamfilter_support_seeking();
     test_mediastreamfilter_set_positions();
     test_mediastreamfilter_get_current_stream_time();
+
+    test_mmstream_set_state();
 
     CoUninitialize();
 }
