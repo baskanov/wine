@@ -127,6 +127,13 @@ coclass VideoRendererDefault { interface IBaseFilter; }
 coclass ACMWrapper { interface IBaseFilter; }
 
 [
+    helpstring("MPEG Audio Codec"),
+    threading(both),
+    uuid(4a2286e0-7bef-11ce-9bd9-0000e202599c)
+]
+coclass CMpegAudioCodec { interface IBaseFilter; }
+
+[
     helpstring("Video Mixing Renderer"),
     threading(both),
     uuid(b87beb7b-8d29-423f-ae4d-6582c10175ac)
