@@ -1053,6 +1053,26 @@ static struct regsvr_filter const filter_list[] = {
 	    { 0xFFFFFFFF },
 	}
     },
+    {   &CLSID_CMpegAudioCodec,
+        &CLSID_LegacyAmFilterCategory,
+        {'M','P','E','G',' ','A','u','d','i','o',' ','D','e','c','o','d','e','r',0},
+        0x3680001,
+        {   {   0,
+                {   { &MEDIATYPE_Audio, &MEDIASUBTYPE_MPEG1Packet },
+                    { &MEDIATYPE_Audio, &MEDIASUBTYPE_MPEG1Payload },
+                    { &MEDIATYPE_Audio, &MEDIASUBTYPE_MPEG1AudioPayload },
+                    { &MEDIATYPE_Audio, &GUID_NULL },
+                    { NULL }
+                },
+            },
+            {   REG_PINFLAG_B_OUTPUT,
+                {   { &MEDIATYPE_Audio, &MEDIASUBTYPE_PCM },
+                    { NULL }
+                },
+            },
+            { 0xFFFFFFFF },
+        }
+    },
     {   &CLSID_WAVEParser,
 	&CLSID_LegacyAmFilterCategory,
 	{'W','a','v','e',' ','P','a','r','s','e','r',0},
