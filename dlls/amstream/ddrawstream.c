@@ -53,8 +53,10 @@ struct ddraw_stream
     IPin *peer;
     IMemAllocator *allocator;
     AM_MEDIA_TYPE mt;
+    DDSURFACEDESC format;
     FILTER_STATE state;
     BOOL eos;
+    BOOL flushing;
     struct list queue;
     HANDLE queued_event;
 };
@@ -236,6 +238,7 @@ static HRESULT WINAPI ddraw_IAMMediaStream_SetState(IAMMediaStream *iface, FILTE
     switch (state)
     {
     case State_Stopped:
+        SetEvent(This->queued_event);
         break;
     case State_Paused:
     case State_Running:
@@ -306,6 +309,148 @@ static const struct IAMMediaStreamVtbl ddraw_IAMMediaStream_vtbl =
     ddraw_IAMMediaStream_JoinFilter,
     ddraw_IAMMediaStream_JoinFilterGraph
 };
+
+static const GUID *subtype_from_format(const DDPIXELFORMAT *format)
+{
+    switch (format->u1.dwRGBBitCount)
+    {
+    case 8:
+        return &MEDIASUBTYPE_RGB8;
+    case 16:
+        return format->u3.dwGBitMask == 0x7e0 ? &MEDIASUBTYPE_RGB565 : &MEDIASUBTYPE_RGB555;
+    case 24:
+        return &MEDIASUBTYPE_RGB24;
+    case 32:
+        return &MEDIASUBTYPE_RGB32;
+    }
+    return &GUID_NULL;
+}
+
+static HRESULT is_media_type_compatible(const AM_MEDIA_TYPE *media_type, const DDSURFACEDESC *format)
+{
+    const VIDEOINFOHEADER *video_info;
+
+    if (!IsEqualGUID(&media_type->majortype, &MEDIATYPE_Video))
+        return S_FALSE;
+
+    if (!IsEqualGUID(&media_type->formattype, &FORMAT_VideoInfo))
+        return S_FALSE;
+
+    if (!media_type->pbFormat)
+        return S_FALSE;
+
+    if (media_type->cbFormat < sizeof(VIDEOINFOHEADER))
+        return S_FALSE;
+
+    video_info = (const VIDEOINFOHEADER *)media_type->pbFormat;
+
+    if (format->dwFlags & DDSD_HEIGHT)
+    {
+        if (video_info->bmiHeader.biWidth != format->dwWidth)
+            return S_FALSE;
+        if (abs(video_info->bmiHeader.biHeight) != format->dwHeight)
+            return S_FALSE;
+    }
+
+    if (format->dwFlags & DDSD_PIXELFORMAT)
+    {
+        const GUID *subtype = subtype_from_format(&format->ddpfPixelFormat);
+        if (!IsEqualGUID(&media_type->subtype, subtype))
+            return S_FALSE;
+    }
+    else
+    {
+        if (!IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB8)  &&
+            !IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB565) &&
+            !IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB555) &&
+            !IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB24) &&
+            !IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB32))
+            return S_FALSE;
+    }
+
+    return S_OK;
+}
+
+static HRESULT reconnect(struct ddraw_stream *This, const DDSURFACEDESC *format)
+{
+    IGraphBuilder *graph_builder;
+    DDSURFACEDESC old_format;
+    AM_MEDIA_TYPE old_media_type;
+    IPin *connected_to;
+    HRESULT hr;
+
+    hr = IFilterGraph_QueryInterface(This->graph, &IID_IGraphBuilder, (void **)&graph_builder);
+    if (FAILED(hr))
+        return hr;
+
+    old_format = This->format;
+    hr = CopyMediaType(&old_media_type, &This->mt);
+    if (FAILED(hr))
+        goto out_graph_builder;
+    connected_to = This->peer;
+    IPin_AddRef(connected_to);
+
+    IGraphBuilder_Disconnect(graph_builder, connected_to);
+    IGraphBuilder_Disconnect(graph_builder, &This->IPin_iface);
+    This->format = *format;
+    hr = IGraphBuilder_Connect(graph_builder, connected_to, &This->IPin_iface);
+    if (FAILED(hr))
+    {
+        This->format = old_format;
+        IGraphBuilder_ConnectDirect(graph_builder, connected_to, &This->IPin_iface, &old_media_type);
+    }
+
+    IPin_Release(connected_to);
+    FreeMediaType(&old_media_type);
+
+out_graph_builder:
+    IGraphBuilder_Release(graph_builder);
+
+    return hr;
+}
+
+static HRESULT is_format_valid(const DDSURFACEDESC *format)
+{
+    if (format->dwFlags & DDSD_PIXELFORMAT)
+    {
+        if (format->ddpfPixelFormat.dwFlags & (DDPF_YUV | DDPF_PALETTEINDEXED1 | DDPF_PALETTEINDEXED2 | DDPF_PALETTEINDEXED4 | DDPF_PALETTEINDEXEDTO8))
+            return S_FALSE;
+
+        if (!(format->ddpfPixelFormat.dwFlags & DDPF_RGB))
+            return S_FALSE;
+
+        switch (format->ddpfPixelFormat.u1.dwRGBBitCount)
+        {
+        case 8:
+            if (!(format->ddpfPixelFormat.dwFlags & DDPF_PALETTEINDEXED8))
+                return S_FALSE;
+            break;
+        case 16:
+            if (format->ddpfPixelFormat.dwFlags & DDPF_PALETTEINDEXED8)
+                return S_FALSE;
+            if ((format->ddpfPixelFormat.u2.dwRBitMask != 0x7c00 ||
+                format->ddpfPixelFormat.u3.dwGBitMask != 0x03e0 ||
+                format->ddpfPixelFormat.u4.dwBBitMask != 0x001f) &&
+                (format->ddpfPixelFormat.u2.dwRBitMask != 0xf800 ||
+                format->ddpfPixelFormat.u3.dwGBitMask != 0x07e0 ||
+                format->ddpfPixelFormat.u4.dwBBitMask != 0x001f))
+                return S_FALSE;
+            break;
+        case 24:
+        case 32:
+            if (format->ddpfPixelFormat.dwFlags & DDPF_PALETTEINDEXED8)
+                return S_FALSE;
+            if (format->ddpfPixelFormat.u2.dwRBitMask != 0xff0000 ||
+                format->ddpfPixelFormat.u3.dwGBitMask != 0x00ff00 ||
+                format->ddpfPixelFormat.u4.dwBBitMask != 0x0000ff)
+                return S_FALSE;
+            break;
+        default:
+            return S_FALSE;
+        }
+    }
+    return S_OK;
+}
 
 static inline struct ddraw_stream *impl_from_IDirectDrawMediaStream(IDirectDrawMediaStream *iface)
 {
@@ -425,10 +570,11 @@ static HRESULT WINAPI ddraw_IDirectDrawMediaStream_GetFormat(IDirectDrawMediaStr
 
     if (current_format)
     {
-        current_format->dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_CAPS;
+        current_format->dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_CAPS | (This->format.dwFlags & DDSD_PIXELFORMAT);
         current_format->dwWidth = video_info->bmiHeader.biWidth;
         current_format->dwHeight = abs(video_info->bmiHeader.biHeight);
         current_format->ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+        current_format->ddpfPixelFormat = This->format.ddpfPixelFormat;
     }
 
     if (palette)
@@ -450,9 +596,28 @@ static HRESULT WINAPI ddraw_IDirectDrawMediaStream_GetFormat(IDirectDrawMediaStr
 static HRESULT WINAPI ddraw_IDirectDrawMediaStream_SetFormat(IDirectDrawMediaStream *iface,
         const DDSURFACEDESC *pDDSurfaceDesc, IDirectDrawPalette *pDirectDrawPalette)
 {
-    FIXME("(%p)->(%p,%p) stub!\n", iface, pDDSurfaceDesc, pDirectDrawPalette);
+    struct ddraw_stream *This = impl_from_IDirectDrawMediaStream(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%p,%p)\n", iface, pDDSurfaceDesc, pDirectDrawPalette);
+
+    if (!pDDSurfaceDesc)
+        return E_POINTER;
+
+    if (S_OK != is_format_valid(pDDSurfaceDesc))
+        return DDERR_INVALIDSURFACETYPE;
+
+    if (This->peer)
+    {
+        if (S_OK != is_media_type_compatible(&This->mt, pDDSurfaceDesc))
+        {
+            if (FAILED(reconnect(This, pDDSurfaceDesc)))
+                return DDERR_INVALIDSURFACETYPE;
+        }
+    }
+
+    This->format = *pDDSurfaceDesc;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI ddraw_IDirectDrawMediaStream_GetDirectDraw(IDirectDrawMediaStream *iface,
@@ -674,26 +839,6 @@ static HRESULT WINAPI ddraw_sink_Connect(IPin *iface, IPin *peer, const AM_MEDIA
     return E_UNEXPECTED;
 }
 
-static BOOL check_media_type(const AM_MEDIA_TYPE *media_type)
-{
-    if (IsEqualGUID(&media_type->majortype, &MEDIATYPE_Video))
-    {
-        if (IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB1) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB4) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB8)  ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB565) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB555) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB24) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB32))
-        {
-            TRACE("Video sub-type %s matches\n", debugstr_guid(&media_type->subtype));
-            return TRUE;
-        }
-    }
-
-    return FALSE;
-}
-
 static HRESULT WINAPI ddraw_sink_ReceiveConnection(IPin *iface, IPin *peer, const AM_MEDIA_TYPE *mt)
 {
     struct ddraw_stream *stream = impl_from_IPin(iface);
@@ -709,7 +854,7 @@ static HRESULT WINAPI ddraw_sink_ReceiveConnection(IPin *iface, IPin *peer, cons
         return VFW_E_ALREADY_CONNECTED;
     }
 
-    if (!check_media_type(mt))
+    if (S_OK != is_media_type_compatible(mt, &stream->format))
     {
         LeaveCriticalSection(&stream->cs);
         return VFW_E_TYPE_NOT_ACCEPTED;
@@ -839,8 +984,11 @@ static HRESULT WINAPI ddraw_sink_QueryId(IPin *iface, WCHAR **id)
 
 static HRESULT WINAPI ddraw_sink_QueryAccept(IPin *iface, const AM_MEDIA_TYPE *mt)
 {
+    struct ddraw_stream *stream = impl_from_IPin(iface);
+
     TRACE("iface %p, mt %p.\n", iface, mt);
-    return check_media_type(mt) ? S_OK : S_FALSE;
+
+    return is_media_type_compatible(mt, &stream->format);
 }
 
 static HRESULT WINAPI ddraw_sink_EnumMediaTypes(IPin *iface, IEnumMediaTypes **enum_media_types)
@@ -871,20 +1019,56 @@ static HRESULT WINAPI ddraw_sink_QueryInternalConnections(IPin *iface, IPin **pi
 
 static HRESULT WINAPI ddraw_sink_EndOfStream(IPin *iface)
 {
-    FIXME("iface %p, stub!\n", iface);
-    return E_NOTIMPL;
+    struct ddraw_stream *stream = impl_from_IPin(iface);
+
+    TRACE("(%p/%p)->()\n", iface, stream);
+
+    EnterCriticalSection(&stream->cs);
+
+    stream->eos = TRUE;
+
+    while (!list_empty(&stream->queue))
+    {
+        struct ddraw_queue_entry *entry =
+            LIST_ENTRY(list_head(&stream->queue), struct ddraw_queue_entry, entry);
+
+        list_remove(&entry->entry);
+        entry->update_result = MS_S_ENDOFSTREAM;
+        SetEvent(entry->updated_event);
+    }
+    LeaveCriticalSection(&stream->cs);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI ddraw_sink_BeginFlush(IPin *iface)
 {
-    FIXME("iface %p, stub!\n", iface);
-    return E_NOTIMPL;
+    struct ddraw_stream *stream = impl_from_IPin(iface);
+
+    TRACE("iface %p\n", iface);
+
+    EnterCriticalSection(&stream->cs);
+
+    stream->flushing = TRUE;
+
+    LeaveCriticalSection(&stream->cs);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI ddraw_sink_EndFlush(IPin *iface)
 {
-    FIXME("iface %p, stub!\n", iface);
-    return E_NOTIMPL;
+    struct ddraw_stream *stream = impl_from_IPin(iface);
+
+    TRACE("iface %p\n", iface);
+
+    EnterCriticalSection(&stream->cs);
+
+    stream->flushing = FALSE;
+
+    LeaveCriticalSection(&stream->cs);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI ddraw_sink_NewSegment(IPin *iface, REFERENCE_TIME start, REFERENCE_TIME stop, double rate)
@@ -981,8 +1165,86 @@ static HRESULT WINAPI ddraw_meminput_GetAllocatorRequirements(IMemInputPin *ifac
 
 static HRESULT WINAPI ddraw_meminput_Receive(IMemInputPin *iface, IMediaSample *sample)
 {
-    FIXME("iface %p, sample %p, stub!\n", iface, sample);
-    return E_NOTIMPL;
+    struct ddraw_stream *stream = impl_from_IMemInputPin(iface);
+    HRESULT hr;
+    BYTE *sample_pointer = NULL;
+
+    TRACE("(%p)->(%p)\n", stream, sample);
+
+    hr = IMediaSample_GetPointer(sample, &sample_pointer);
+    if (FAILED(hr))
+        return hr;
+
+    EnterCriticalSection(&stream->cs);
+    for (;;)
+    {
+        if (stream->state == State_Stopped)
+        {
+            hr = VFW_E_WRONG_STATE;
+            goto out_critical_section;
+        }
+        if (stream->eos || stream->flushing)
+        {
+            hr = S_FALSE;
+            goto out_critical_section;
+        }
+        while (!list_empty(&stream->queue))
+        {
+            struct ddraw_queue_entry *entry =
+                LIST_ENTRY(list_head(&stream->queue), struct ddraw_queue_entry, entry);
+            IDirectDrawSurface *surface = NULL;
+            RECT rect;
+            DDSURFACEDESC desc = { sizeof(DDSURFACEDESC) };
+            BITMAPINFOHEADER *bitmap_info = &((VIDEOINFOHEADER *)stream->mt.pbFormat)->bmiHeader;
+            LONG stride = ((bitmap_info->biWidth * bitmap_info->biBitCount + 31) & ~31) >> 3;
+            DWORD row_size;
+            BYTE *row_pointer = sample_pointer;
+            BYTE *output_row_pointer;
+            DWORD row;
+            if (bitmap_info->biHeight > 0)
+            {
+                row_pointer += stride * (bitmap_info->biHeight - 1);
+                stride = -stride;
+            }
+            entry->update_result = IDirectDrawStreamSample_GetSurface(entry->sample, &surface, &rect);
+            if (FAILED(entry->update_result))
+                goto out_queue_entry;
+            entry->update_result = IDirectDrawSurface_Lock(surface, &rect, &desc, DDLOCK_WAIT, NULL);
+            if (FAILED(entry->update_result))
+                goto out_surface;
+            row_size = (rect.right - rect.left) * desc.ddpfPixelFormat.u1.dwRGBBitCount >> 3;
+            output_row_pointer = (BYTE *)desc.lpSurface;
+            for (row = rect.top; row < rect.bottom; ++row)
+            {
+                CopyMemory(output_row_pointer, row_pointer, row_size);
+                row_pointer += stride;
+                output_row_pointer += desc.u1.lPitch;
+            }
+
+            IDirectDrawSurface_Unlock(surface, NULL);
+
+            entry->update_result = S_OK;
+
+            IDirectDrawSurface_Release(surface);
+            list_remove(&entry->entry);
+            SetEvent(entry->updated_event);
+            LeaveCriticalSection(&stream->cs);
+            return S_OK;
+
+        out_surface:
+            IDirectDrawSurface_Release(surface);
+        out_queue_entry:
+            list_remove(&entry->entry);
+            SetEvent(entry->updated_event);
+        }
+        LeaveCriticalSection(&stream->cs);
+        WaitForSingleObject(stream->queued_event, INFINITE);
+        EnterCriticalSection(&stream->cs);
+    }
+out_critical_section:
+    LeaveCriticalSection(&stream->cs);
+
+    return hr;
 }
 
 static HRESULT WINAPI ddraw_meminput_ReceiveMultiple(IMemInputPin *iface,
@@ -1046,14 +1308,28 @@ HRESULT ddraw_stream_create(IMultiMediaStream *parent, const MSPID *purpose_id,
     return S_OK;
 }
 
-static void ddraw_queue_sample(IDirectDrawMediaStream *iface, struct ddraw_queue_entry *entry)
+static HRESULT queue_sample(IDirectDrawMediaStream *iface, struct ddraw_queue_entry *entry)
 {
     struct ddraw_stream *This = impl_from_IDirectDrawMediaStream(iface);
+    HRESULT hr = S_OK;
 
     EnterCriticalSection(&This->cs);
+    if (This->state == State_Stopped)
+    {
+        hr = MS_E_NOTRUNNING;
+        goto out_critical_section;
+    }
+    if (This->eos)
+    {
+        hr = MS_S_ENDOFSTREAM;
+        goto out_critical_section;
+    }
     list_add_tail(&This->queue, &entry->entry);
     SetEvent(This->queued_event);
+out_critical_section:
     LeaveCriticalSection(&This->cs);
+
+    return hr;
 }
 
 typedef struct {
@@ -1148,10 +1424,13 @@ static HRESULT WINAPI IDirectDrawStreamSampleImpl_Update(IDirectDrawStreamSample
                                                          PAPCFUNC func_APC, DWORD APC_data)
 {
     IDirectDrawStreamSampleImpl *This = impl_from_IDirectDrawStreamSample(iface);
+    HRESULT hr;
 
     TRACE("(%p)->(%x,%p,%p,%u)\n", iface, flags, event, func_APC, APC_data);
 
-    ddraw_queue_sample(This->parent, &This->entry);
+    hr = queue_sample(This->parent, &This->entry);
+    if (hr != S_OK)
+        return hr;
 
     WaitForSingleObject(This->entry.updated_event, INFINITE);
 
@@ -1268,14 +1547,31 @@ static HRESULT ddrawstreamsample_create(IDirectDrawMediaStream *parent, IDirectD
         }
     }
 
-    if (rect)
-        object->rect = *rect;
-    else if (object->surface)
     {
         DDSURFACEDESC desc = { sizeof(desc) };
         hr = IDirectDrawSurface_GetSurfaceDesc(object->surface, &desc);
-        if (hr == S_OK)
+        if (FAILED(hr))
+        {
+            IDirectDrawStreamSample_Release(&object->IDirectDrawStreamSample_iface);
+            return hr;
+        }
+        if (rect)
+        {
+            object->rect = *rect;
+            desc.dwWidth = rect->right - rect->left;
+            desc.dwHeight = rect->bottom - rect->top;
+            desc.dwFlags |= DDSD_WIDTH | DDSD_HEIGHT;
+        }
+        else
+        {
             SetRect(&object->rect, 0, 0, desc.dwWidth, desc.dwHeight);
+        }
+        hr = IDirectDrawMediaStream_SetFormat(parent, &desc, NULL);
+        if (FAILED(hr))
+        {
+            IDirectDrawStreamSample_Release(&object->IDirectDrawStreamSample_iface);
+            return hr;
+        }
     }
 
     object->entry.sample = &object->IDirectDrawStreamSample_iface;

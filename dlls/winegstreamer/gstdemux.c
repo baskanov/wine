@@ -254,7 +254,7 @@ static gboolean amt_from_gst_caps_video_raw(const GstCaps *caps, AM_MEDIA_TYPE *
         }
         bih->biCompression = amt->subtype.Data1;
     }
-    bih->biSizeImage = width * height * bih->biBitCount / 8;
+    bih->biSizeImage = ((width * bih->biBitCount + 31) & ~31) / 8 * height;
     if ((vih->AvgTimePerFrame = (REFERENCE_TIME)MulDiv(10000000, denom, nom)) == -1)
         vih->AvgTimePerFrame = 0; /* zero division or integer overflow */
     bih->biSize = sizeof(*bih);
@@ -721,6 +721,8 @@ static GstFlowReturn got_data_sink(GstPad *pad, GstObject *parent, GstBuffer *bu
     hr = IMediaSample_SetActualDataLength(sample, info.size);
     if(FAILED(hr)){
         WARN("SetActualDataLength failed: %08x\n", hr);
+        gst_buffer_unmap(buf, &info);
+        gst_buffer_unref(buf);
         return GST_FLOW_FLUSHING;
     }
 
