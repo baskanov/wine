@@ -60,6 +60,7 @@ typedef struct DirectDrawMediaStreamImpl {
     DirectDrawMediaStreamInputPin *input_pin;
     IFilterGraph *graph;
     CRITICAL_SECTION critical_section;
+    DDSURFACEDESC format;
     FILTER_STATE state;
     struct list sample_queue;
     HANDLE sample_queued_event;
@@ -228,12 +229,14 @@ static HRESULT WINAPI DirectDrawMediaStreamImpl_IAMMediaStream_SetState(IAMMedia
     TRACE("(%p/%p)->(%u)\n", This, iface, state);
 
     EnterCriticalSection(&This->critical_section);
+
     if (This->state == state)
         goto out_critical_section;
 
     switch (state)
     {
     case State_Stopped:
+        SetEvent(This->sample_queued_event);
         break;
     case State_Paused:
     case State_Running:
@@ -304,6 +307,148 @@ static const struct IAMMediaStreamVtbl DirectDrawMediaStreamImpl_IAMMediaStream_
     DirectDrawMediaStreamImpl_IAMMediaStream_JoinFilter,
     DirectDrawMediaStreamImpl_IAMMediaStream_JoinFilterGraph
 };
+
+static const GUID *ddrawmediastream_subtype_from_format(const DDPIXELFORMAT *format)
+{
+    switch (format->u1.dwRGBBitCount)
+    {
+    case 8:
+        return &MEDIASUBTYPE_RGB8;
+    case 16:
+        return format->u3.dwGBitMask == 0x7e0 ? &MEDIASUBTYPE_RGB565 : &MEDIASUBTYPE_RGB555;
+    case 24:
+        return &MEDIASUBTYPE_RGB24;
+    case 32:
+        return &MEDIASUBTYPE_RGB32;
+    }
+    return &GUID_NULL;
+}
+
+static HRESULT ddrawmediastream_is_media_type_compatible(const AM_MEDIA_TYPE *media_type, const DDSURFACEDESC *format)
+{
+    const VIDEOINFOHEADER *video_info;
+
+    if (!IsEqualGUID(&media_type->majortype, &MEDIATYPE_Video))
+        return S_FALSE;
+
+    if (!IsEqualGUID(&media_type->formattype, &FORMAT_VideoInfo))
+        return S_FALSE;
+
+    if (!media_type->pbFormat)
+        return S_FALSE;
+
+    if (media_type->cbFormat < sizeof(VIDEOINFOHEADER))
+        return S_FALSE;
+
+    video_info = (const VIDEOINFOHEADER *)media_type->pbFormat;
+
+    if (format->dwFlags & DDSD_HEIGHT)
+    {
+        if (video_info->bmiHeader.biWidth != format->dwWidth)
+            return S_FALSE;
+        if (abs(video_info->bmiHeader.biHeight) != format->dwHeight)
+            return S_FALSE;
+    }
+
+    if (format->dwFlags & DDSD_PIXELFORMAT)
+    {
+        const GUID *subtype = ddrawmediastream_subtype_from_format(&format->ddpfPixelFormat);
+        if (!IsEqualGUID(&media_type->subtype, subtype))
+            return S_FALSE;
+    }
+    else
+    {
+        if (!IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB8)  &&
+            !IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB565) &&
+            !IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB555) &&
+            !IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB24) &&
+            !IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB32))
+            return S_FALSE;
+    }
+
+    return S_OK;
+}
+
+static HRESULT ddrawmediastream_reconnect(DirectDrawMediaStreamImpl *This, const DDSURFACEDESC *format)
+{
+    IGraphBuilder *graph_builder;
+    DDSURFACEDESC old_format;
+    AM_MEDIA_TYPE old_media_type;
+    IPin *connected_to;
+    HRESULT hr;
+
+    hr = IFilterGraph_QueryInterface(This->graph, &IID_IGraphBuilder, (void **)&graph_builder);
+    if (FAILED(hr))
+        return hr;
+
+    old_format = This->format;
+    hr = CopyMediaType(&old_media_type, &This->input_pin->pin.pin.mtCurrent);
+    if (FAILED(hr))
+        goto out_graph_builder;
+    connected_to = This->input_pin->pin.pin.pConnectedTo;
+    IPin_AddRef(connected_to);
+
+    IGraphBuilder_Disconnect(graph_builder, connected_to);
+    IGraphBuilder_Disconnect(graph_builder, &This->input_pin->pin.pin.IPin_iface);
+    This->format = *format;
+    hr = IGraphBuilder_Connect(graph_builder, connected_to, &This->input_pin->pin.pin.IPin_iface);
+    if (FAILED(hr))
+    {
+        This->format = old_format;
+        IGraphBuilder_ConnectDirect(graph_builder, connected_to, &This->input_pin->pin.pin.IPin_iface, &old_media_type);
+    }
+
+    IPin_Release(connected_to);
+    FreeMediaType(&old_media_type);
+
+out_graph_builder:
+    IGraphBuilder_Release(graph_builder);
+
+    return hr;
+}
+
+static HRESULT ddrawmediastream_is_format_valid(const DDSURFACEDESC *format)
+{
+    if (format->dwFlags & DDSD_PIXELFORMAT)
+    {
+        if (format->ddpfPixelFormat.dwFlags & (DDPF_YUV | DDPF_PALETTEINDEXED1 | DDPF_PALETTEINDEXED2 | DDPF_PALETTEINDEXED4 | DDPF_PALETTEINDEXEDTO8))
+            return S_FALSE;
+
+        if (!(format->ddpfPixelFormat.dwFlags & DDPF_RGB))
+            return S_FALSE;
+
+        switch (format->ddpfPixelFormat.u1.dwRGBBitCount)
+        {
+        case 8:
+            if (!(format->ddpfPixelFormat.dwFlags & DDPF_PALETTEINDEXED8))
+                return S_FALSE;
+            break;
+        case 16:
+            if (format->ddpfPixelFormat.dwFlags & DDPF_PALETTEINDEXED8)
+                return S_FALSE;
+            if ((format->ddpfPixelFormat.u2.dwRBitMask != 0x7c00 ||
+                format->ddpfPixelFormat.u3.dwGBitMask != 0x03e0 ||
+                format->ddpfPixelFormat.u4.dwBBitMask != 0x001f) &&
+                (format->ddpfPixelFormat.u2.dwRBitMask != 0xf800 ||
+                format->ddpfPixelFormat.u3.dwGBitMask != 0x07e0 ||
+                format->ddpfPixelFormat.u4.dwBBitMask != 0x001f))
+                return S_FALSE;
+            break;
+        case 24:
+        case 32:
+            if (format->ddpfPixelFormat.dwFlags & DDPF_PALETTEINDEXED8)
+                return S_FALSE;
+            if (format->ddpfPixelFormat.u2.dwRBitMask != 0xff0000 ||
+                format->ddpfPixelFormat.u3.dwGBitMask != 0x00ff00 ||
+                format->ddpfPixelFormat.u4.dwBBitMask != 0x0000ff)
+                return S_FALSE;
+            break;
+        default:
+            return S_FALSE;
+        }
+    }
+    return S_OK;
+}
 
 static inline DirectDrawMediaStreamImpl *impl_from_IDirectDrawMediaStream(IDirectDrawMediaStream *iface)
 {
@@ -423,10 +568,11 @@ static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_GetFormat
 
     if (current_format)
     {
-        current_format->dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_CAPS;
+        current_format->dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_CAPS | (This->format.dwFlags & DDSD_PIXELFORMAT);
         current_format->dwWidth = video_info->bmiHeader.biWidth;
         current_format->dwHeight = abs(video_info->bmiHeader.biHeight);
         current_format->ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+        current_format->ddpfPixelFormat = This->format.ddpfPixelFormat;
     }
 
     if (palette)
@@ -448,9 +594,28 @@ static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_GetFormat
 static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_SetFormat(IDirectDrawMediaStream *iface,
         const DDSURFACEDESC *pDDSurfaceDesc, IDirectDrawPalette *pDirectDrawPalette)
 {
-    FIXME("(%p)->(%p,%p) stub!\n", iface, pDDSurfaceDesc, pDirectDrawPalette);
+    DirectDrawMediaStreamImpl *This = impl_from_IDirectDrawMediaStream(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%p,%p)\n", iface, pDDSurfaceDesc, pDirectDrawPalette);
+
+    if (!pDDSurfaceDesc)
+        return E_POINTER;
+
+    if (S_OK != ddrawmediastream_is_format_valid(pDDSurfaceDesc))
+        return DDERR_INVALIDSURFACETYPE;
+
+    if (This->input_pin->pin.pin.pConnectedTo)
+    {
+        if (S_OK != ddrawmediastream_is_media_type_compatible(&This->input_pin->pin.pin.mtCurrent, pDDSurfaceDesc))
+        {
+            if (FAILED(ddrawmediastream_reconnect(This, pDDSurfaceDesc)))
+                return DDERR_INVALIDSURFACETYPE;
+        }
+    }
+
+    This->format = *pDDSurfaceDesc;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI DirectDrawMediaStreamImpl_IDirectDrawMediaStream_GetDirectDraw(IDirectDrawMediaStream *iface,
@@ -553,6 +718,33 @@ static ULONG WINAPI DirectDrawMediaStreamInputPin_IPin_Release(IPin *iface)
     return IAMMediaStream_Release(&This->parent->IAMMediaStream_iface);
 }
 
+/*** IPin methods ***/
+static HRESULT WINAPI DirectDrawMediaStreamInputPin_IPin_EndOfStream(IPin *iface)
+{
+    DirectDrawMediaStreamInputPin *This = impl_from_DirectDrawMediaStreamInputPin_IPin(iface);
+    HRESULT hr;
+
+    TRACE("(%p/%p)->()\n", iface, This);
+
+    hr = BaseInputPinImpl_EndOfStream(iface);
+    if (FAILED(hr))
+        return hr;
+
+    EnterCriticalSection(This->pin.pin.pCritSec);
+    while (!list_empty(&This->parent->sample_queue))
+    {
+        DirectDrawMediaStreamQueuedSample *output_sample =
+            LIST_ENTRY(list_head(&This->parent->sample_queue), DirectDrawMediaStreamQueuedSample, entry);
+
+        list_remove(&output_sample->entry);
+        output_sample->update_result = MS_S_ENDOFSTREAM;
+        SetEvent(output_sample->update_complete_event);
+    }
+    LeaveCriticalSection(This->pin.pin.pCritSec);
+
+    return S_OK;
+}
+
 static const IPinVtbl DirectDrawMediaStreamInputPin_IPin_Vtbl =
 {
     DirectDrawMediaStreamInputPin_IPin_QueryInterface,
@@ -569,7 +761,7 @@ static const IPinVtbl DirectDrawMediaStreamInputPin_IPin_Vtbl =
     BaseInputPinImpl_QueryAccept,
     BasePinImpl_EnumMediaTypes,
     BasePinImpl_QueryInternalConnections,
-    BaseInputPinImpl_EndOfStream,
+    DirectDrawMediaStreamInputPin_IPin_EndOfStream,
     BaseInputPinImpl_BeginFlush,
     BaseInputPinImpl_EndFlush,
     BaseInputPinImpl_NewSegment,
@@ -581,22 +773,7 @@ static HRESULT WINAPI DirectDrawMediaStreamInputPin_CheckMediaType(BasePin *base
 
     TRACE("(%p)->(%p)\n", This, media_type);
 
-    if (IsEqualGUID(&media_type->majortype, &MEDIATYPE_Video))
-    {
-        if (IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB1) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB4) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB8)  ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB565) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB555) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB24) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB32))
-        {
-            TRACE("Video sub-type %s matches\n", debugstr_guid(&media_type->subtype));
-            return S_OK;
-        }
-    }
-
-    return S_FALSE;
+    return ddrawmediastream_is_media_type_compatible(media_type, &This->parent->format);
 }
 
 static LONG WINAPI DirectDrawMediaStreamInputPin_GetMediaTypeVersion(BasePin *base)
@@ -648,10 +825,85 @@ static HRESULT WINAPI DirectDrawMediaStreamInputPin_GetMediaType(BasePin *base, 
 static HRESULT WINAPI DirectDrawMediaStreamInputPin_Receive(BaseInputPin *base, IMediaSample *sample)
 {
     DirectDrawMediaStreamInputPin *This = impl_from_DirectDrawMediaStreamInputPin_IPin(&base->pin.IPin_iface);
+    HRESULT hr;
+    BYTE *sample_pointer = NULL;
 
-    FIXME("(%p)->(%p) stub!\n", This, sample);
+    TRACE("(%p)->(%p)\n", This, sample);
 
-    return E_NOTIMPL;
+    hr = IMediaSample_GetPointer(sample, &sample_pointer);
+    if (FAILED(hr))
+        return hr;
+
+    EnterCriticalSection(This->pin.pin.pCritSec);
+    for (;;)
+    {
+        if (This->parent->state == State_Stopped)
+        {
+            hr = VFW_E_WRONG_STATE;
+            goto out_critical_section;
+        }
+        if (base->end_of_stream || base->flushing)
+        {
+            hr = S_FALSE;
+            goto out_critical_section;
+        }
+        while (!list_empty(&This->parent->sample_queue))
+        {
+            DirectDrawMediaStreamQueuedSample *output_sample =
+                LIST_ENTRY(list_head(&This->parent->sample_queue), DirectDrawMediaStreamQueuedSample, entry);
+            IDirectDrawSurface *surface = NULL;
+            RECT rect;
+            DDSURFACEDESC desc = { sizeof(DDSURFACEDESC) };
+            BITMAPINFOHEADER *bitmap_info = &((VIDEOINFOHEADER *)base->pin.mtCurrent.pbFormat)->bmiHeader;
+            LONG stride = ((bitmap_info->biWidth * bitmap_info->biBitCount + 31) & ~31) >> 3;
+            DWORD row_size;
+            BYTE *row_pointer = sample_pointer;
+            BYTE *output_row_pointer;
+            DWORD row;
+            if (bitmap_info->biHeight > 0)
+            {
+                row_pointer += stride * (bitmap_info->biHeight - 1);
+                stride = -stride;
+            }
+            output_sample->update_result = IDirectDrawStreamSample_GetSurface(output_sample->sample, &surface, &rect);
+            if (FAILED(output_sample->update_result))
+                goto out_queue_entry;
+            output_sample->update_result = IDirectDrawSurface_Lock(surface, &rect, &desc, DDLOCK_WAIT, NULL);
+            if (FAILED(output_sample->update_result))
+                goto out_surface;
+            row_size = (rect.right - rect.left) * desc.ddpfPixelFormat.u1.dwRGBBitCount >> 3;
+            output_row_pointer = (BYTE *)desc.lpSurface;
+            for (row = rect.top; row < rect.bottom; ++row)
+            {
+                CopyMemory(output_row_pointer, row_pointer, row_size);
+                row_pointer += stride;
+                output_row_pointer += desc.u1.lPitch;
+            }
+
+            IDirectDrawSurface_Unlock(surface, NULL);
+
+            output_sample->update_result = S_OK;
+
+            IDirectDrawSurface_Release(surface);
+            list_remove(&output_sample->entry);
+            SetEvent(output_sample->update_complete_event);
+            LeaveCriticalSection(This->pin.pin.pCritSec);
+            return S_OK;
+
+        out_surface:
+            IDirectDrawSurface_Release(surface);
+        out_queue_entry:
+            list_remove(&output_sample->entry);
+            SetEvent(output_sample->update_complete_event);
+        }
+        LeaveCriticalSection(This->pin.pin.pCritSec);
+        WaitForSingleObject(This->parent->sample_queued_event, INFINITE);
+        EnterCriticalSection(This->pin.pin.pCritSec);
+    }
+out_critical_section:
+    LeaveCriticalSection(This->pin.pin.pCritSec);
+
+    return hr;
 }
 
 static const BaseInputPinFuncTable DirectDrawMediaStreamInputPin_FuncTable =
@@ -712,14 +964,28 @@ out_object:
     return hr;
 }
 
-static void directdrawmediastream_queue_sample(IDirectDrawMediaStream *iface, DirectDrawMediaStreamQueuedSample *sample)
+static HRESULT directdrawmediastream_queue_sample(IDirectDrawMediaStream *iface, DirectDrawMediaStreamQueuedSample *sample)
 {
     DirectDrawMediaStreamImpl *This = impl_from_IDirectDrawMediaStream(iface);
+    HRESULT hr = S_OK;
 
     EnterCriticalSection(&This->critical_section);
+    if (This->state == State_Stopped)
+    {
+        hr = MS_E_NOTRUNNING;
+        goto out_critical_section;
+    }
+    if (This->input_pin->pin.end_of_stream)
+    {
+        hr = MS_S_ENDOFSTREAM;
+        goto out_critical_section;
+    }
     list_add_tail(&This->sample_queue, &sample->entry);
     SetEvent(This->sample_queued_event);
+out_critical_section:
     LeaveCriticalSection(&This->critical_section);
+
+    return hr;
 }
 
 struct AudioMediaStreamImpl;
@@ -739,6 +1005,10 @@ typedef struct AudioMediaStreamImpl {
     AudioMediaStreamInputPin *input_pin;
     IFilterGraph *graph;
     CRITICAL_SECTION critical_section;
+    WAVEFORMATEX format;
+    FILTER_STATE state;
+    struct list sample_queue;
+    HANDLE sample_queued_event;
 } AudioMediaStreamImpl;
 
 static inline AudioMediaStreamImpl *impl_from_AudioMediaStream_IAMMediaStream(IAMMediaStream *iface)
@@ -897,10 +1167,36 @@ static HRESULT WINAPI AudioMediaStreamImpl_IAMMediaStream_Initialize(IAMMediaStr
 static HRESULT WINAPI AudioMediaStreamImpl_IAMMediaStream_SetState(IAMMediaStream *iface, FILTER_STATE state)
 {
     AudioMediaStreamImpl *This = impl_from_AudioMediaStream_IAMMediaStream(iface);
+    HRESULT hr;
 
-    FIXME("(%p/%p)->(%u) stub!\n", This, iface, state);
+    TRACE("(%p/%p)->(%u)\n", This, iface, state);
 
-    return S_FALSE;
+    EnterCriticalSection(&This->critical_section);
+
+    if (This->state == state)
+        goto out_critical_section;
+
+    switch (state)
+    {
+    case State_Stopped:
+        SetEvent(This->sample_queued_event);
+        break;
+    case State_Paused:
+    case State_Running:
+        if (State_Stopped == This->state)
+            This->input_pin->pin.end_of_stream = FALSE;
+        break;
+    default:
+        hr = E_INVALIDARG;
+        goto out_critical_section;
+    }
+
+    This->state = state;
+
+out_critical_section:
+    LeaveCriticalSection(&This->critical_section);
+
+    return hr;
 }
 
 static HRESULT WINAPI AudioMediaStreamImpl_IAMMediaStream_JoinAMMultiMediaStream(IAMMediaStream *iface, IAMMultiMediaStream *am_multi_media_stream)
@@ -954,6 +1250,58 @@ static const struct IAMMediaStreamVtbl AudioMediaStreamImpl_IAMMediaStream_Vtbl 
     AudioMediaStreamImpl_IAMMediaStream_JoinFilter,
     AudioMediaStreamImpl_IAMMediaStream_JoinFilterGraph
 };
+
+static HRESULT audiomediastream_is_media_type_compatible(const AM_MEDIA_TYPE *media_type, const WAVEFORMATEX *format)
+{
+    const WAVEFORMATEX *media_type_format;
+
+    if (!IsEqualGUID(&media_type->majortype, &MEDIATYPE_Audio))
+        return S_FALSE;
+
+    if (!IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_PCM))
+        return S_FALSE;
+
+    if (!IsEqualGUID(&media_type->formattype, &FORMAT_WaveFormatEx))
+        return S_FALSE;
+
+    if (!media_type->pbFormat)
+        return S_FALSE;
+
+    if (media_type->cbFormat < sizeof(WAVEFORMATEX))
+        return S_FALSE;
+
+    media_type_format = (const WAVEFORMATEX *)media_type->pbFormat;
+
+    if (media_type_format->wFormatTag != WAVE_FORMAT_PCM)
+        return S_FALSE;
+
+    if (format->wFormatTag == WAVE_FORMAT_PCM)
+    {
+        if (media_type_format->nChannels != format->nChannels)
+            return S_FALSE;
+
+        if (media_type_format->nSamplesPerSec != format->nSamplesPerSec)
+            return S_FALSE;
+
+        if (media_type_format->nAvgBytesPerSec != format->nAvgBytesPerSec)
+            return S_FALSE;
+
+        if (media_type_format->nBlockAlign != format->nBlockAlign)
+            return S_FALSE;
+
+        if (media_type_format->wBitsPerSample != format->wBitsPerSample)
+            return S_FALSE;
+    }
+
+    return S_OK;
+}
+
+static HRESULT audiomediastream_is_format_valid(const WAVEFORMATEX *format)
+{
+    if (format->wFormatTag != WAVE_FORMAT_PCM)
+        return S_FALSE;
+    return S_OK;
+}
 
 static inline AudioMediaStreamImpl *impl_from_IAudioMediaStream(IAudioMediaStream *iface)
 {
@@ -1060,22 +1408,40 @@ static HRESULT WINAPI AudioMediaStreamImpl_IAudioMediaStream_GetFormat(IAudioMed
 {
     AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
 
-    FIXME("(%p/%p)->(%p) stub!\n", iface, This, wave_format_current);
+    TRACE("(%p/%p)->(%p)\n", iface, This, wave_format_current);
 
     if (!wave_format_current)
         return E_POINTER;
 
-    return MS_E_NOSTREAM;
+    if (!This->input_pin->pin.pin.mtCurrent.pbFormat)
+        return MS_E_NOSTREAM;
 
+    *wave_format_current = *(const WAVEFORMATEX *)This->input_pin->pin.pin.mtCurrent.pbFormat;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI AudioMediaStreamImpl_IAudioMediaStream_SetFormat(IAudioMediaStream *iface, const WAVEFORMATEX *wave_format)
 {
     AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
 
-    FIXME("(%p/%p)->(%p) stub!\n", iface, This, wave_format);
+    TRACE("(%p/%p)->(%p)\n", iface, This, wave_format);
 
-    return E_NOTIMPL;
+    if (!wave_format)
+        return E_POINTER;
+
+    if (S_OK != audiomediastream_is_format_valid(wave_format))
+        return E_INVALIDARG;
+
+    if (This->input_pin->pin.pin.pConnectedTo)
+    {
+        if (S_OK != audiomediastream_is_media_type_compatible(&This->input_pin->pin.pin.mtCurrent, wave_format))
+            return E_INVALIDARG;
+    }
+
+    This->format = *wave_format;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI AudioMediaStreamImpl_IAudioMediaStream_CreateSample(IAudioMediaStream *iface, IAudioData *audio_data,
@@ -1110,6 +1476,13 @@ static const struct IAudioMediaStreamVtbl AudioMediaStreamImpl_IAudioMediaStream
     AudioMediaStreamImpl_IAudioMediaStream_CreateSample
 };
 
+typedef struct {
+    struct list entry;
+    IAudioStreamSample *sample;
+    HRESULT update_result;
+    HANDLE update_complete_event;
+} AudioMediaStreamQueuedSample;
+
 static inline AudioMediaStreamInputPin *impl_from_AudioMediaStreamInputPin_IPin(IPin *iface)
 {
     return CONTAINING_RECORD(iface, AudioMediaStreamInputPin, pin.pin.IPin_iface);
@@ -1137,6 +1510,44 @@ static ULONG WINAPI AudioMediaStreamInputPin_IPin_Release(IPin *iface)
     return IAMMediaStream_Release(&This->parent->IAMMediaStream_iface);
 }
 
+/*** IPin methods ***/
+static HRESULT WINAPI AudioMediaStreamInputPin_IPin_EndOfStream(IPin *iface)
+{
+    AudioMediaStreamInputPin *This = impl_from_AudioMediaStreamInputPin_IPin(iface);
+    HRESULT hr;
+
+    TRACE("(%p/%p)->()\n", iface, This);
+
+    hr = BaseInputPinImpl_EndOfStream(iface);
+    if (FAILED(hr))
+        return hr;
+
+    EnterCriticalSection(This->pin.pin.pCritSec);
+    while (!list_empty(&This->parent->sample_queue))
+    {
+        AudioMediaStreamQueuedSample *output_sample =
+            LIST_ENTRY(list_head(&This->parent->sample_queue), AudioMediaStreamQueuedSample, entry);
+        IAudioData *audio_data = NULL;
+        DWORD actual_length = 0;
+
+        list_remove(&output_sample->entry);
+
+        output_sample->update_result = IAudioStreamSample_GetAudioData(output_sample->sample, &audio_data);
+        if (SUCCEEDED(output_sample->update_result))
+        {
+            output_sample->update_result = IAudioData_GetInfo(audio_data, NULL, NULL, &actual_length);
+            if (SUCCEEDED(output_sample->update_result))
+                output_sample->update_result = actual_length > 0 ? S_OK : MS_S_ENDOFSTREAM;
+            IAudioData_Release(audio_data);
+        }
+
+        SetEvent(output_sample->update_complete_event);
+    }
+    LeaveCriticalSection(This->pin.pin.pCritSec);
+
+    return S_OK;
+}
+
 static const IPinVtbl AudioMediaStreamInputPin_IPin_Vtbl =
 {
     AudioMediaStreamInputPin_IPin_QueryInterface,
@@ -1153,7 +1564,7 @@ static const IPinVtbl AudioMediaStreamInputPin_IPin_Vtbl =
     BaseInputPinImpl_QueryAccept,
     BasePinImpl_EnumMediaTypes,
     BasePinImpl_QueryInternalConnections,
-    BaseInputPinImpl_EndOfStream,
+    AudioMediaStreamInputPin_IPin_EndOfStream,
     BaseInputPinImpl_BeginFlush,
     BaseInputPinImpl_EndFlush,
     BaseInputPinImpl_NewSegment,
@@ -1165,16 +1576,7 @@ static HRESULT WINAPI AudioMediaStreamInputPin_CheckMediaType(BasePin *base, con
 
     TRACE("(%p)->(%p)\n", This, media_type);
 
-    if (IsEqualGUID(&media_type->majortype, &MEDIATYPE_Audio))
-    {
-        if (IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_PCM))
-        {
-            TRACE("Audio sub-type %s matches\n", debugstr_guid(&media_type->subtype));
-            return S_OK;
-        }
-    }
-
-    return S_OK;
+    return audiomediastream_is_media_type_compatible(media_type, &This->parent->format);
 }
 
 static LONG WINAPI AudioMediaStreamInputPin_GetMediaTypeVersion(BasePin *base)
@@ -1203,10 +1605,89 @@ static HRESULT WINAPI AudioMediaStreamInputPin_GetMediaType(BasePin *base, int i
 static HRESULT WINAPI AudioMediaStreamInputPin_Receive(BaseInputPin *base, IMediaSample *sample)
 {
     AudioMediaStreamInputPin *This = impl_from_AudioMediaStreamInputPin_IPin(&base->pin.IPin_iface);
+    HRESULT hr;
+    DWORD input_length = 0;
+    BYTE *input_pointer = NULL;
+    DWORD input_position = 0;
 
-    FIXME("(%p)->(%p) stub!\n", This, sample);
+    TRACE("(%p)->(%p)\n", This, sample);
 
-    return E_NOTIMPL;
+    hr = IMediaSample_GetPointer(sample, &input_pointer);
+    if (FAILED(hr))
+        return hr;
+    input_length = IMediaSample_GetActualDataLength(sample);
+
+    EnterCriticalSection(This->pin.pin.pCritSec);
+    for (;;)
+    {
+        if (This->parent->state == State_Stopped)
+        {
+            hr = VFW_E_WRONG_STATE;
+            goto out_critical_section;
+        }
+        if (base->end_of_stream || base->flushing)
+        {
+            hr = S_FALSE;
+            goto out_critical_section;
+        }
+        while (!list_empty(&This->parent->sample_queue))
+        {
+            AudioMediaStreamQueuedSample *output_sample =
+                LIST_ENTRY(list_head(&This->parent->sample_queue), AudioMediaStreamQueuedSample, entry);
+            IAudioData *audio_data = NULL;
+            DWORD output_length = 0;
+            BYTE *output_pointer = NULL;
+            DWORD output_position = 0;
+            DWORD advance = 0;
+
+            output_sample->update_result = IAudioStreamSample_GetAudioData(output_sample->sample, &audio_data);
+            if (FAILED(output_sample->update_result))
+                goto out_queue_entry;
+            output_sample->update_result = IAudioData_GetInfo(audio_data, &output_length, &output_pointer, &output_position);
+            if (FAILED(output_sample->update_result))
+                goto out_audio_data;
+
+            advance = min(input_length - input_position, output_length - output_position);
+            CopyMemory(&output_pointer[output_position], &input_pointer[input_position], advance);
+
+            input_position += advance;
+            output_position += advance;
+
+            output_sample->update_result = IAudioData_SetActual(audio_data, output_position);
+            if (FAILED(output_sample->update_result))
+                goto out_audio_data;
+
+            IAudioData_Release(audio_data);
+
+            if (output_position == output_length)
+            {
+                output_sample->update_result = S_OK;
+
+                list_remove(&output_sample->entry);
+                SetEvent(output_sample->update_complete_event);
+            }
+            if (input_position == input_length)
+            {
+                hr = S_OK;
+                goto out_critical_section;
+            }
+
+            continue;
+
+        out_audio_data:
+            IAudioData_Release(audio_data);
+        out_queue_entry:
+            list_remove(&output_sample->entry);
+            SetEvent(output_sample->update_complete_event);
+        }
+        LeaveCriticalSection(This->pin.pin.pCritSec);
+        WaitForSingleObject(This->parent->sample_queued_event, INFINITE);
+        EnterCriticalSection(This->pin.pin.pCritSec);
+    }
+out_critical_section:
+    LeaveCriticalSection(This->pin.pin.pCritSec);
+
+    return hr;
 }
 
 static const BaseInputPinFuncTable AudioMediaStreamInputPin_FuncTable =
@@ -1254,6 +1735,8 @@ HRESULT audiomediastream_create(IMultiMediaStream *parent, const MSPID *purpose_
     object->parent = parent;
     object->purpose_id = *purpose_id;
     object->stream_type = stream_type;
+    object->sample_queued_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    list_init(&object->sample_queue);
 
     *media_stream = &object->IAMMediaStream_iface;
 
@@ -1261,6 +1744,30 @@ HRESULT audiomediastream_create(IMultiMediaStream *parent, const MSPID *purpose_
 
 out_object:
     HeapFree(GetProcessHeap(), 0, object);
+
+    return hr;
+}
+
+static HRESULT audiomediastream_queue_sample(IAudioMediaStream *iface, AudioMediaStreamQueuedSample *sample)
+{
+    AudioMediaStreamImpl *This = impl_from_IAudioMediaStream(iface);
+    HRESULT hr = S_OK;
+
+    EnterCriticalSection(&This->critical_section);
+    if (This->state == State_Stopped)
+    {
+        hr = MS_E_NOTRUNNING;
+        goto out_critical_section;
+    }
+    if (This->input_pin->pin.end_of_stream)
+    {
+        hr = MS_S_ENDOFSTREAM;
+        goto out_critical_section;
+    }
+    list_add_tail(&This->sample_queue, &sample->entry);
+    SetEvent(This->sample_queued_event);
+out_critical_section:
+    LeaveCriticalSection(&This->critical_section);
 
     return hr;
 }
@@ -1358,10 +1865,13 @@ static HRESULT WINAPI IDirectDrawStreamSampleImpl_Update(IDirectDrawStreamSample
                                                          PAPCFUNC func_APC, DWORD APC_data)
 {
     IDirectDrawStreamSampleImpl *This = impl_from_IDirectDrawStreamSample(iface);
+    HRESULT hr;
 
     TRACE("(%p)->(%x,%p,%p,%u)\n", iface, flags, event, func_APC, APC_data);
 
-    directdrawmediastream_queue_sample(This->parent, &This->queue_entry);
+    hr = directdrawmediastream_queue_sample(This->parent, &This->queue_entry);
+    if (hr != S_OK)
+        return hr;
 
     WaitForSingleObject(This->queue_entry.update_complete_event, INFINITE);
 
@@ -1478,14 +1988,31 @@ static HRESULT ddrawstreamsample_create(IDirectDrawMediaStream *parent, IDirectD
         }
     }
 
-    if (rect)
-        object->rect = *rect;
-    else if (object->surface)
     {
         DDSURFACEDESC desc = { sizeof(desc) };
         hr = IDirectDrawSurface_GetSurfaceDesc(object->surface, &desc);
-        if (hr == S_OK)
+        if (FAILED(hr))
+        {
+            IDirectDrawStreamSample_Release(&object->IDirectDrawStreamSample_iface);
+            return hr;
+        }
+        if (rect)
+        {
+            object->rect = *rect;
+            desc.dwWidth = rect->right - rect->left;
+            desc.dwHeight = rect->bottom - rect->top;
+            desc.dwFlags |= DDSD_WIDTH | DDSD_HEIGHT;
+        }
+        else
+        {
             SetRect(&object->rect, 0, 0, desc.dwWidth, desc.dwHeight);
+        }
+        hr = IDirectDrawMediaStream_SetFormat(parent, &desc, NULL);
+        if (FAILED(hr))
+        {
+            IDirectDrawStreamSample_Release(&object->IDirectDrawStreamSample_iface);
+            return hr;
+        }
     }
 
     object->queue_entry.sample = &object->IDirectDrawStreamSample_iface;
@@ -1499,8 +2026,9 @@ static HRESULT ddrawstreamsample_create(IDirectDrawMediaStream *parent, IDirectD
 typedef struct {
     IAudioStreamSample IAudioStreamSample_iface;
     LONG ref;
-    IMediaStream *parent;
+    IAudioMediaStream *parent;
     IAudioData *audio_data;
+    AudioMediaStreamQueuedSample queue_entry;
 } IAudioStreamSampleImpl;
 
 static inline IAudioStreamSampleImpl *impl_from_IAudioStreamSample(IAudioStreamSample *iface)
@@ -1547,7 +2075,13 @@ static ULONG WINAPI IAudioStreamSampleImpl_Release(IAudioStreamSample *iface)
     TRACE("(%p)->(): new ref = %u\n", iface, ref);
 
     if (!ref)
+    {
+        if (This->audio_data)
+            IAudioData_Release(This->audio_data);
+        if (This->queue_entry.update_complete_event)
+            CloseHandle(This->queue_entry.update_complete_event);
         HeapFree(GetProcessHeap(), 0, This);
+    }
 
     return ref;
 }
@@ -1579,9 +2113,45 @@ static HRESULT WINAPI IAudioStreamSampleImpl_SetSampleTimes(IAudioStreamSample *
 static HRESULT WINAPI IAudioStreamSampleImpl_Update(IAudioStreamSample *iface, DWORD flags, HANDLE event,
                                                          PAPCFUNC func_APC, DWORD APC_data)
 {
-    FIXME("(%p)->(%x,%p,%p,%u): stub\n", iface, flags, event, func_APC, APC_data);
+    IAudioStreamSampleImpl *This = impl_from_IAudioStreamSample(iface);
+    IAudioData *audio_data = NULL;
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%x,%p,%p,%u)\n", iface, flags, event, func_APC, APC_data);
+
+    TRACE("FUCK0\n");
+
+    hr = IAudioStreamSample_GetAudioData(iface, &audio_data);
+    if (FAILED(hr))
+        return hr;
+
+    TRACE("FUCK1\n");
+
+    hr = IAudioData_SetActual(audio_data, 0);
+    if (FAILED(hr))
+    {
+        IAudioData_Release(audio_data);
+        return hr;
+    }
+
+    TRACE("FUCK2\n");
+
+    IAudioData_Release(audio_data);
+
+    TRACE("FUCK3\n");
+
+    hr = audiomediastream_queue_sample(This->parent, &This->queue_entry);
+    TRACE("FUCK4 0x%x\n", hr);
+    if (hr != S_OK)
+        return hr;
+
+    TRACE("FUCK5\n");
+
+    WaitForSingleObject(This->queue_entry.update_complete_event, INFINITE);
+
+    TRACE("FUCK6 0x%x\n", This->queue_entry.update_result);
+
+    return This->queue_entry.update_result;
 }
 
 static HRESULT WINAPI IAudioStreamSampleImpl_CompletionStatus(IAudioStreamSample *iface, DWORD flags, DWORD milliseconds)
@@ -1594,9 +2164,18 @@ static HRESULT WINAPI IAudioStreamSampleImpl_CompletionStatus(IAudioStreamSample
 /*** IAudioStreamSample methods ***/
 static HRESULT WINAPI IAudioStreamSampleImpl_GetAudioData(IAudioStreamSample *iface, IAudioData **audio_data)
 {
-    FIXME("(%p)->(%p): stub\n", iface, audio_data);
+    IAudioStreamSampleImpl *This = impl_from_IAudioStreamSample(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%p)\n", iface, audio_data);
+
+    if (!audio_data)
+        return E_POINTER;
+
+    *audio_data = This->audio_data;
+    if (*audio_data)
+        IAudioData_AddRef(*audio_data);
+
+    return S_OK;
 }
 
 static const struct IAudioStreamSampleVtbl AudioStreamSample_Vtbl =
@@ -1618,8 +2197,14 @@ static const struct IAudioStreamSampleVtbl AudioStreamSample_Vtbl =
 static HRESULT audiostreamsample_create(IAudioMediaStream *parent, IAudioData *audio_data, IAudioStreamSample **audio_stream_sample)
 {
     IAudioStreamSampleImpl *object;
+    WAVEFORMATEX format;
+    HRESULT hr;
 
     TRACE("(%p)\n", audio_stream_sample);
+
+    hr = IAudioData_GetFormat(audio_data, &format);
+    if (FAILED(hr))
+        return hr;
 
     object = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(IAudioStreamSampleImpl));
     if (!object)
@@ -1627,8 +2212,17 @@ static HRESULT audiostreamsample_create(IAudioMediaStream *parent, IAudioData *a
 
     object->IAudioStreamSample_iface.lpVtbl = &AudioStreamSample_Vtbl;
     object->ref = 1;
-    object->parent = (IMediaStream*)parent;
+    object->parent = parent;
     object->audio_data = audio_data;
+
+    IAudioData_AddRef(object->audio_data);
+
+    hr = IAudioMediaStream_SetFormat(parent, &format);
+    if (FAILED(hr))
+        IAudioStreamSample_Release(&object->IAudioStreamSample_iface);
+
+    object->queue_entry.sample = &object->IAudioStreamSample_iface;
+    object->queue_entry.update_complete_event = CreateEventW(NULL, FALSE, FALSE, NULL);
 
     *audio_stream_sample = (IAudioStreamSample*)&object->IAudioStreamSample_iface;
 

@@ -261,11 +261,14 @@ static HRESULT WINAPI AVIDec_SetMediaType(TransformFilter *tf, PIN_DIRECTION dir
             AM_MEDIA_TYPE* outpmt = &This->tf.pmt;
             const CLSID* outsubtype;
             DWORD bih_size;
-            DWORD output_depth = bmi->biBitCount;
+//             DWORD output_depth = bmi->biBitCount;
+            DWORD output_depth = 16;
+            DWORD color_table_size = 0;
             DWORD result;
             FreeMediaType(outpmt);
 
-            switch(bmi->biBitCount)
+//             switch(bmi->biBitCount)
+            switch(output_depth)
             {
                 case 32: outsubtype = &MEDIASUBTYPE_RGB32; break;
                 case 24: outsubtype = &MEDIASUBTYPE_RGB24; break;
@@ -278,8 +281,24 @@ static HRESULT WINAPI AVIDec_SetMediaType(TransformFilter *tf, PIN_DIRECTION dir
                     break;
             }
 
+//             if (bmi->biCompression == BI_RGB)
+//             {
+//                 if (output_depth <= 8)
+//                 {
+//                     if (bmi->biClrUsed)
+//                         color_table_size = bmi->biClrUsed * 4u;
+//                     else
+//                         color_table_size = (1u << output_depth) * 4u;
+//                 }
+//             }
+//             else
+//             {
+//                 if (bmi->biCompression == BI_BITFIELDS)
+                    color_table_size = 3u * 4u;
+//             }
+
             /* Copy bitmap header from media type to 1 for input and 1 for output */
-            bih_size = bmi->biSize + bmi->biClrUsed * 4;
+            bih_size = bmi->biSize + color_table_size;
             This->pBihIn = CoTaskMemAlloc(bih_size);
             if (!This->pBihIn)
             {
@@ -296,9 +315,13 @@ static HRESULT WINAPI AVIDec_SetMediaType(TransformFilter *tf, PIN_DIRECTION dir
             memcpy(This->pBihOut, bmi, bih_size);
 
             /* Update output format as non compressed bitmap */
-            This->pBihOut->biCompression = 0;
+//             This->pBihOut->biCompression = 0;
+            This->pBihOut->biCompression = BI_BITFIELDS;
             This->pBihOut->biBitCount = output_depth;
             This->pBihOut->biSizeImage = This->pBihOut->biWidth * This->pBihOut->biHeight * This->pBihOut->biBitCount / 8;
+            ((DWORD *)((BYTE *)This->pBihOut + sizeof(BITMAPINFOHEADER)))[0] = 0xF800;
+            ((DWORD *)((BYTE *)This->pBihOut + sizeof(BITMAPINFOHEADER)))[1] = 0x07E0;
+            ((DWORD *)((BYTE *)This->pBihOut + sizeof(BITMAPINFOHEADER)))[2] = 0x001F;
             TRACE("Size: %u\n", This->pBihIn->biSize);
             result = ICDecompressQuery(This->hvid, This->pBihIn, This->pBihOut);
             if (result != ICERR_OK)
@@ -308,13 +331,25 @@ static HRESULT WINAPI AVIDec_SetMediaType(TransformFilter *tf, PIN_DIRECTION dir
             }
 
             /* Update output media type */
-            CopyMediaType(outpmt, pmt);
+            *outpmt = *pmt;
+            if (outpmt->pUnk)
+                IUnknown_AddRef(outpmt->pUnk);
             outpmt->subtype = *outsubtype;
 
             if (IsEqualIID(&pmt->formattype, &FORMAT_VideoInfo))
-                memcpy(&(((VIDEOINFOHEADER *)outpmt->pbFormat)->bmiHeader), This->pBihOut, This->pBihOut->biSize);
+            {
+                outpmt->cbFormat = sizeof(VIDEOINFOHEADER) + color_table_size;
+                outpmt->pbFormat = CoTaskMemAlloc(outpmt->cbFormat);
+                memcpy(outpmt->pbFormat, pmt->pbFormat, sizeof(VIDEOINFOHEADER));
+                memcpy(&(((VIDEOINFOHEADER *)outpmt->pbFormat)->bmiHeader), This->pBihOut, bih_size);
+            }
             else if (IsEqualIID(&pmt->formattype, &FORMAT_VideoInfo2))
-                memcpy(&(((VIDEOINFOHEADER2 *)outpmt->pbFormat)->bmiHeader), This->pBihOut, This->pBihOut->biSize);
+            {
+                outpmt->cbFormat = sizeof(VIDEOINFOHEADER2) + color_table_size;
+                outpmt->pbFormat = CoTaskMemAlloc(outpmt->cbFormat);
+                memcpy(outpmt->pbFormat, pmt->pbFormat, sizeof(VIDEOINFOHEADER2));
+                memcpy(&(((VIDEOINFOHEADER2 *)outpmt->pbFormat)->bmiHeader), This->pBihOut, bih_size);
+            }
             else
                 assert(0);
 

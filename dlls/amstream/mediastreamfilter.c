@@ -167,6 +167,7 @@ static HRESULT WINAPI MediaStreamFilterImpl_Run(IMediaStreamFilter *iface, REFER
 
     EnterCriticalSection(&This->filter.csFilter);
     This->filter.state = State_Running;
+    This->filter.rtStreamStart = start;
     LeaveCriticalSection(&This->filter.csFilter);
 
     for (i = 0; i < This->nb_streams; ++i)

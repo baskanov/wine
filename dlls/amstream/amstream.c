@@ -193,6 +193,9 @@ static HRESULT WINAPI IAMMultiMediaStreamImpl_SetState(IAMMultiMediaStream* ifac
     else if (new_state == STREAMSTATE_STOP)
         hr = IMediaControl_Stop(This->media_control);
 
+    if (SUCCEEDED(hr))
+        return S_OK;
+
     return hr;
 }
 
@@ -432,6 +435,9 @@ static HRESULT WINAPI IAMMultiMediaStreamImpl_OpenFile(IAMMultiMediaStream* ifac
 
     if (SUCCEEDED(ret) && !(flags & AMMSF_NORENDER))
         ret = IGraphBuilder_Render(This->pFilterGraph, This->ipin);
+
+    if (SUCCEEDED(ret) && flags & AMMSF_RUN)
+        ret = IAMMultiMediaStream_SetState(iface, STREAMSTATE_RUN);
 
     if (EnumPins)
         IEnumPins_Release(EnumPins);
