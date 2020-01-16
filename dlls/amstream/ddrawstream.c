@@ -51,6 +51,8 @@ struct ddraw_stream
     IPin *peer;
     IMemAllocator *allocator;
     AM_MEDIA_TYPE mt;
+    FILTER_STATE state;
+    BOOL eos;
 };
 
 static inline struct ddraw_stream *impl_from_IAMMediaStream(IAMMediaStream *iface)
@@ -210,10 +212,34 @@ static HRESULT WINAPI ddraw_IAMMediaStream_Initialize(IAMMediaStream *iface, IUn
 static HRESULT WINAPI ddraw_IAMMediaStream_SetState(IAMMediaStream *iface, FILTER_STATE state)
 {
     struct ddraw_stream *This = impl_from_IAMMediaStream(iface);
+    HRESULT hr = S_OK;
 
-    FIXME("(%p/%p)->(%u) stub!\n", This, iface, state);
+    TRACE("(%p/%p)->(%u)\n", This, iface, state);
 
-    return S_FALSE;
+    EnterCriticalSection(&This->cs);
+    if (This->state == state)
+        goto out_critical_section;
+
+    switch (state)
+    {
+    case State_Stopped:
+        break;
+    case State_Paused:
+    case State_Running:
+        if (State_Stopped == This->state)
+            This->eos = FALSE;
+        break;
+    default:
+        hr = E_INVALIDARG;
+        goto out_critical_section;
+    }
+
+    This->state = state;
+
+out_critical_section:
+    LeaveCriticalSection(&This->cs);
+
+    return hr;
 }
 
 static HRESULT WINAPI ddraw_IAMMediaStream_JoinAMMultiMediaStream(IAMMediaStream *iface, IAMMultiMediaStream *am_multi_media_stream)
