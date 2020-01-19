@@ -317,9 +317,12 @@ static HRESULT WINAPI filter_Run(IMediaStreamFilter *iface, REFERENCE_TIME start
 
 static HRESULT WINAPI filter_GetState(IMediaStreamFilter *iface, DWORD timeout, FILTER_STATE *state)
 {
-    FIXME("iface %p, timeout %u, state %p, stub!\n", iface, timeout, state);
+    struct filter *filter = impl_from_IMediaStreamFilter(iface);
 
-    *state = State_Stopped;
+    TRACE("iface %p, timeout %u, state %p\n", iface, timeout, state);
+
+    *state = filter->state;
+
     return S_OK;
 }
 
