@@ -381,6 +381,9 @@ static HRESULT WINAPI multimedia_stream_OpenFile(IAMMultiMediaStream *iface,
     if (SUCCEEDED(ret) && !(flags & AMMSF_NORENDER))
         ret = IGraphBuilder_Render(This->pFilterGraph, This->ipin);
 
+    if (SUCCEEDED(ret) && (flags & AMMSF_RUN))
+        ret = IAMMultiMediaStream_SetState(iface, STREAMSTATE_RUN);
+
     if (EnumPins)
         IEnumPins_Release(EnumPins);
     if (BaseFilter)
