@@ -273,8 +273,10 @@ static void test_interfaces(void)
 
 static void test_openfile(const WCHAR *test_avi_path)
 {
+    IMediaControl *media_control;
     IMediaStreamFilter *filter;
     IAMMultiMediaStream *pams;
+    OAFilterState state;
     HRESULT hr;
     LONG ref;
     IGraphBuilder* pgraph;
@@ -317,6 +319,29 @@ static void test_openfile(const WCHAR *test_avi_path)
     ref = IAMMultiMediaStream_Release(pams);
     ok(!ref, "Got outstanding refcount %d.\n", ref);
     ref = IMediaStreamFilter_Release(filter);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+
+    pams = create_ammultimediastream();
+    hr = IAMMultiMediaStream_AddMediaStream(pams, NULL, &MSPID_PrimaryAudio, 0, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IAMMultiMediaStream_GetFilterGraph(pams, &pgraph);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(pgraph != NULL, "Expected non-NULL graph.\n");
+    hr = IGraphBuilder_QueryInterface(pgraph, &IID_IMediaControl, (void **)&media_control);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMultiMediaStream_OpenFile(pams, test_avi_path, AMMSF_RUN);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    state = 0xdeadbeef;
+    hr = IMediaControl_GetState(media_control, INFINITE, &state);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(state == State_Running, "Got state %#x.\n", state);
+
+    ref = IAMMultiMediaStream_Release(pams);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    IMediaControl_Release(media_control);
+    ref = IGraphBuilder_Release(pgraph);
     ok(!ref, "Got outstanding refcount %d.\n", ref);
 }
 
