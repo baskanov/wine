@@ -131,9 +131,18 @@ static HRESULT WINAPI IAudioStreamSampleImpl_CompletionStatus(IAudioStreamSample
 /*** IAudioStreamSample methods ***/
 static HRESULT WINAPI IAudioStreamSampleImpl_GetAudioData(IAudioStreamSample *iface, IAudioData **audio_data)
 {
-    FIXME("(%p)->(%p): stub\n", iface, audio_data);
+    IAudioStreamSampleImpl *This = impl_from_IAudioStreamSample(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%p)\n", iface, audio_data);
+
+    if (!audio_data)
+        return E_POINTER;
+
+    *audio_data = This->audio_data;
+    if (*audio_data)
+        IAudioData_AddRef(*audio_data);
+
+    return S_OK;
 }
 
 static const struct IAudioStreamSampleVtbl AudioStreamSample_Vtbl =
