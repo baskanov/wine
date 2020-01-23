@@ -46,6 +46,8 @@ static const WCHAR wGstreamer_Mp3[] =
 {'G','S','t','r','e','a','m','e','r',' ','M','p','3',' ','f','i','l','t','e','r',0};
 static const WCHAR wGstreamer_AudioConvert[] =
 {'G','S','t','r','e','a','m','e','r',' ','A','u','d','i','o','C','o','n','v','e','r','t',' ','f','i','l','t','e','r',0};
+static const WCHAR mpeg_audio_decoderW[] =
+{'M','P','E','G',' ','A','u','d','i','o',' ','D','e','c','o','d','e','r',0};
 static const WCHAR wave_parserW[] =
 {'W','a','v','e',' ','P','a','r','s','e','r',0};
 static const WCHAR avi_splitterW[] =
@@ -184,6 +186,45 @@ AMOVIESETUP_FILTER const amfAudioConvert =
     MERIT_UNLIKELY,
     2,
     amfAudioConvertPin
+};
+
+static const AMOVIESETUP_MEDIATYPE mepg_audio_decoder_sink_type_data[] =
+{
+    {&MEDIATYPE_Audio, &MEDIASUBTYPE_MPEG1AudioPayload},
+};
+
+static const AMOVIESETUP_MEDIATYPE mepg_audio_decoder_source_type_data[] =
+{
+    {&MEDIATYPE_Audio, &MEDIASUBTYPE_PCM},
+};
+
+static const AMOVIESETUP_PIN mepg_audio_decoder_pin_data[] =
+{
+    {
+        NULL,
+        FALSE, FALSE, FALSE, FALSE,
+        &GUID_NULL,
+        NULL,
+        ARRAY_SIZE(mepg_audio_decoder_sink_type_data),
+        mepg_audio_decoder_sink_type_data,
+    },
+    {
+        NULL,
+        FALSE, TRUE, FALSE, FALSE,
+        &GUID_NULL,
+        NULL,
+        ARRAY_SIZE(mepg_audio_decoder_source_type_data),
+        mepg_audio_decoder_source_type_data,
+    },
+};
+
+static const AMOVIESETUP_FILTER mepg_audio_decoder_filter_data =
+{
+    &CLSID_CMpegAudioCodec,
+    mpeg_audio_decoderW,
+    0x3680001,
+    ARRAY_SIZE(mepg_audio_decoder_pin_data),
+    mepg_audio_decoder_pin_data,
 };
 
 static const AMOVIESETUP_MEDIATYPE wave_parser_sink_type_data[] =
@@ -353,6 +394,13 @@ FactoryTemplate const g_Templates[] = {
         Gstreamer_AudioConvert_create,
         NULL,
         &amfAudioConvert,
+    },
+    {
+        mpeg_audio_decoderW,
+        &CLSID_CMpegAudioCodec,
+        Gstreamer_MpegAudio_create,
+        NULL,
+        &mepg_audio_decoder_filter_data,
     },
     {
         wave_parserW,
