@@ -690,6 +690,7 @@ static HRESULT mp3_decoder_connect_sink(TransformFilter *tf, const AM_MEDIA_TYPE
                                  "layer", G_TYPE_INT, layer,
                                  "rate", G_TYPE_INT, wfx->nSamplesPerSec,
                                  "channels", G_TYPE_INT, wfx->nChannels,
+                                 "parsed", G_TYPE_BOOLEAN, TRUE,
                                  NULL);
     capsout = gst_caps_new_simple("audio/x-raw",
                                   "format", G_TYPE_STRING, "S16LE",
