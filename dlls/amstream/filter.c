@@ -364,10 +364,16 @@ static HRESULT WINAPI filter_EnumPins(IMediaStreamFilter *iface, IEnumPins **enu
     EnterCriticalSection(&filter->cs);
 
     if (!enum_pins)
+    {
+        LeaveCriticalSection(&filter->cs);
         return E_POINTER;
+    }
 
     if (!(object = heap_alloc(sizeof(*object))))
+    {
+        LeaveCriticalSection(&filter->cs);
         return E_OUTOFMEMORY;
+    }
 
     object->IEnumPins_iface.lpVtbl = &enum_pins_vtbl;
     object->refcount = 1;
@@ -376,6 +382,7 @@ static HRESULT WINAPI filter_EnumPins(IMediaStreamFilter *iface, IEnumPins **enu
     if (!(object->pins = heap_alloc(filter->nb_streams * sizeof(*object->pins))))
     {
         heap_free(object);
+        LeaveCriticalSection(&filter->cs);
         return E_OUTOFMEMORY;
     }
     for (i = 0; i < filter->nb_streams; ++i)
