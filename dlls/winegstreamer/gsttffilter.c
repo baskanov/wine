@@ -54,28 +54,25 @@ WINE_DEFAULT_DEBUG_CHANNEL(gstreamer);
 
 struct typeinfo {
     GstCaps *caps;
+    GstCaps *capsin;
+    GstCaps *capsout;
     const char *type;
 };
 
-static gboolean match_element(GstPluginFeature *feature, gpointer gdata)
+static gboolean match_pad(GstElementFactory *factory, GstPadDirection direction, GstCaps *refcaps, gboolean intersection)
 {
-    struct typeinfo *data = (struct typeinfo*)gdata;
-    GstElementFactory *factory;
     const GList *list;
-
-    if (!GST_IS_ELEMENT_FACTORY(feature))
-        return FALSE;
-    factory = GST_ELEMENT_FACTORY(feature);
-    if (!strstr(gst_element_factory_get_klass(factory), data->type))
-        return FALSE;
     for (list = gst_element_factory_get_static_pad_templates(factory); list; list = list->next) {
         GstStaticPadTemplate *pad = (GstStaticPadTemplate*)list->data;
         GstCaps *caps;
         gboolean ret;
-        if (pad->direction != GST_PAD_SINK)
+        if (pad->direction != direction)
             continue;
         caps = gst_static_caps_get(&pad->static_caps);
-        ret = gst_caps_is_always_compatible(caps, data->caps);
+        if (intersection)
+            ret = gst_caps_can_intersect(caps, refcaps);
+        else
+            ret = gst_caps_is_always_compatible(caps, refcaps);
         gst_caps_unref(caps);
         if (ret)
             return TRUE;
@@ -83,7 +80,26 @@ static gboolean match_element(GstPluginFeature *feature, gpointer gdata)
     return FALSE;
 }
 
-static const char *Gstreamer_FindMatch(const char *strcaps)
+static gboolean match_element(GstPluginFeature *feature, gpointer gdata)
+{
+    struct typeinfo *data = (struct typeinfo*)gdata;
+    GstElementFactory *factory;
+
+    if (!GST_IS_ELEMENT_FACTORY(feature))
+        return FALSE;
+    factory = GST_ELEMENT_FACTORY(feature);
+    if (!strstr(gst_element_factory_get_klass(factory), data->type))
+        return FALSE;
+    if (!match_pad(factory, GST_PAD_SINK, data->caps, FALSE))
+        return FALSE;
+    if (!match_pad(factory, GST_PAD_SINK, data->capsin, TRUE))
+        return FALSE;
+    if (!match_pad(factory, GST_PAD_SRC, data->capsout, TRUE))
+        return FALSE;
+    return TRUE;
+}
+
+static const char *Gstreamer_FindMatch(const char *strcaps, GstCaps *capsin, GstCaps *capsout)
 {
     struct typeinfo data;
     GList *list, *copy;
@@ -91,9 +107,9 @@ static const char *Gstreamer_FindMatch(const char *strcaps)
     GstElementFactory *bestfactory = NULL;
     GstCaps *caps = gst_caps_from_string(strcaps);
 
-    TRACE("%s\n", strcaps);
-
     data.caps = caps;
+    data.capsin = capsin;
+    data.capsout = capsout;
     data.type = "Decoder";
     copy = gst_registry_feature_filter(gst_registry_get(), match_element, 0, &data);
     for (list = copy; list; list = list->next) {
@@ -118,6 +134,7 @@ static const char *Gstreamer_FindMatch(const char *strcaps)
 typedef struct GstTfImpl {
     TransformFilter tf;
     const char *gstreamer_name;
+    const char *caps;
     GstElement *filter;
     GstPad *my_src, *my_sink, *their_src, *their_sink;
     LONG cbBuffer;
@@ -296,6 +313,7 @@ void Gstreamer_transform_pad_added(GstElement *filter, GstPad *pad, gpointer use
 static HRESULT Gstreamer_transform_ConnectInput(GstTfImpl *This, const AM_MEDIA_TYPE *amt, GstCaps *capsin, GstCaps *capsout)
 {
     GstIterator *it;
+    const char *gstreamer_name = This->gstreamer_name;
     BOOL done = FALSE, found = FALSE;
     int ret;
 
@@ -303,9 +321,14 @@ static HRESULT Gstreamer_transform_ConnectInput(GstTfImpl *This, const AM_MEDIA_
 
     mark_wine_thread();
 
-    This->filter = gst_element_factory_make(This->gstreamer_name, NULL);
+    if (!gstreamer_name)
+        gstreamer_name = Gstreamer_FindMatch(This->caps, capsin, capsout);
+    if (!gstreamer_name)
+        return E_FAIL;
+
+    This->filter = gst_element_factory_make(gstreamer_name, NULL);
     if (!This->filter) {
-        ERR("Could not make %s filter\n", This->gstreamer_name);
+        ERR("Could not make %s filter\n", gstreamer_name);
         return E_FAIL;
     }
     This->my_src = gst_pad_new("yuvsrc", GST_PAD_SRC);
@@ -337,7 +360,7 @@ static HRESULT Gstreamer_transform_ConnectInput(GstTfImpl *This, const AM_MEDIA_
     }
     gst_iterator_free(it);
     if (!This->their_sink) {
-        ERR("Could not find sink on filter %s\n", This->gstreamer_name);
+        ERR("Could not find sink on filter %s\n", gstreamer_name);
         return E_FAIL;
     }
 
@@ -485,7 +508,7 @@ static HRESULT WINAPI Gstreamer_transform_QOS(TransformFilter *iface, IBaseFilte
 }
 
 static HRESULT Gstreamer_transform_create(IUnknown *outer, const CLSID *clsid,
-        const char *name, const TransformFilterFuncTable *vtbl, void **obj)
+        const char *name, const char *caps, const TransformFilterFuncTable *vtbl, void **obj)
 {
     GstTfImpl *This;
 
@@ -493,6 +516,7 @@ static HRESULT Gstreamer_transform_create(IUnknown *outer, const CLSID *clsid,
         return E_OUTOFMEMORY;
 
     This->gstreamer_name = name;
+    This->caps = caps;
     *obj = &This->tf.filter.IUnknown_inner;
 
     TRACE("returning %p\n", This);
@@ -596,7 +620,7 @@ static const TransformFilterFuncTable Gstreamer_MpegAudio_vtbl = {
 
 IUnknown * CALLBACK Gstreamer_MpegAudio_create(IUnknown *punkouter, HRESULT *phr)
 {
-    const char *plugin;
+    const char *caps;
     IUnknown *obj = NULL;
 
     TRACE("%p %p\n", punkouter, phr);
@@ -609,14 +633,9 @@ IUnknown * CALLBACK Gstreamer_MpegAudio_create(IUnknown *punkouter, HRESULT *phr
 
     mark_wine_thread();
 
-    plugin = Gstreamer_FindMatch("audio/mpeg, mpegversion=(int) 1");
-    if (!plugin)
-    {
-        *phr = E_FAIL;
-        return NULL;
-    }
+    caps = "audio/mpeg, mpegversion=(int) 1";
 
-    *phr = Gstreamer_transform_create(punkouter, &CLSID_CMpegAudioCodec, plugin, &Gstreamer_MpegAudio_vtbl, (LPVOID*)&obj);
+    *phr = Gstreamer_transform_create(punkouter, &CLSID_CMpegAudioCodec, NULL, caps, &Gstreamer_MpegAudio_vtbl, (LPVOID*)&obj);
 
     TRACE("returning %p\n", obj);
 
@@ -724,7 +743,7 @@ static const TransformFilterFuncTable Gstreamer_Mp3_vtbl = {
 
 IUnknown * CALLBACK Gstreamer_Mp3_create(IUnknown *punkouter, HRESULT *phr)
 {
-    const char *plugin;
+    const char *caps;
     IUnknown *obj = NULL;
 
     TRACE("%p %p\n", punkouter, phr);
@@ -737,14 +756,9 @@ IUnknown * CALLBACK Gstreamer_Mp3_create(IUnknown *punkouter, HRESULT *phr)
 
     mark_wine_thread();
 
-    plugin = Gstreamer_FindMatch("audio/mpeg, mpegversion=(int) 1");
-    if (!plugin)
-    {
-        *phr = E_FAIL;
-        return NULL;
-    }
+    caps = "audio/mpeg, mpegversion=(int) 1";
 
-    *phr = Gstreamer_transform_create(punkouter, &CLSID_Gstreamer_Mp3, plugin, &Gstreamer_Mp3_vtbl, (LPVOID*)&obj);
+    *phr = Gstreamer_transform_create(punkouter, &CLSID_Gstreamer_Mp3, NULL, caps, &Gstreamer_Mp3_vtbl, (LPVOID*)&obj);
 
     TRACE("returning %p\n", obj);
 
@@ -865,7 +879,7 @@ IUnknown * CALLBACK Gstreamer_YUV2RGB_create(IUnknown *punkouter, HRESULT *phr)
         return NULL;
     }
 
-    *phr = Gstreamer_transform_create(punkouter, &CLSID_Gstreamer_YUV2RGB, "videoconvert", &Gstreamer_YUV2RGB_vtbl, (LPVOID*)&obj);
+    *phr = Gstreamer_transform_create(punkouter, &CLSID_Gstreamer_YUV2RGB, "videoconvert", NULL, &Gstreamer_YUV2RGB_vtbl, (LPVOID*)&obj);
 
     TRACE("returning %p\n", obj);
 
@@ -961,7 +975,7 @@ IUnknown * CALLBACK Gstreamer_YUV2ARGB_create(IUnknown *punkouter, HRESULT *phr)
         return NULL;
     }
 
-    *phr = Gstreamer_transform_create(punkouter, &CLSID_Gstreamer_YUV2ARGB, "videoconvert", &Gstreamer_YUV2ARGB_vtbl, (LPVOID*)&obj);
+    *phr = Gstreamer_transform_create(punkouter, &CLSID_Gstreamer_YUV2ARGB, "videoconvert", NULL, &Gstreamer_YUV2ARGB_vtbl, (LPVOID*)&obj);
 
     TRACE("returning %p\n", obj);
 
@@ -1081,7 +1095,7 @@ IUnknown * CALLBACK Gstreamer_AudioConvert_create(IUnknown *punkouter, HRESULT *
         return NULL;
     }
 
-    *phr = Gstreamer_transform_create(punkouter, &CLSID_Gstreamer_AudioConvert, "audioconvert", &Gstreamer_AudioConvert_vtbl, (LPVOID*)&obj);
+    *phr = Gstreamer_transform_create(punkouter, &CLSID_Gstreamer_AudioConvert, "audioconvert", NULL, &Gstreamer_AudioConvert_vtbl, (LPVOID*)&obj);
 
     TRACE("returning %p\n", obj);
 
