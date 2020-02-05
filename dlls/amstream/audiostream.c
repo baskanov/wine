@@ -538,13 +538,17 @@ static HRESULT WINAPI audio_IAudioMediaStream_GetFormat(IAudioMediaStream *iface
 {
     struct audio_stream *This = impl_from_IAudioMediaStream(iface);
 
-    FIXME("(%p/%p)->(%p) stub!\n", iface, This, wave_format_current);
+    TRACE("(%p/%p)->(%p)\n", iface, This, wave_format_current);
 
     if (!wave_format_current)
         return E_POINTER;
 
-    return MS_E_NOSTREAM;
+    if (!This->peer)
+        return MS_E_NOSTREAM;
 
+    *wave_format_current = *(const WAVEFORMATEX *)This->mt.pbFormat;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI audio_IAudioMediaStream_SetFormat(IAudioMediaStream *iface, const WAVEFORMATEX *wave_format)
