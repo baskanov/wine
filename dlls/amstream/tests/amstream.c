@@ -2618,6 +2618,164 @@ static void test_audiostream_set_format(void)
     ok(!ref, "Got outstanding refcount %d.\n", ref);
 }
 
+static void check_audiostream_media_type(const AM_MEDIA_TYPE *media_type, HRESULT expected_hr)
+{
+    IAMMultiMediaStream *mmstream = create_ammultimediastream();
+    IGraphBuilder *graph = NULL;
+    struct testfilter source;
+    IMediaStream *stream = NULL;
+    IPin *pin = NULL;
+    HRESULT hr;
+    ULONG ref;
+
+    hr = IAMMultiMediaStream_Initialize(mmstream, STREAMTYPE_READ, 0, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMultiMediaStream_AddMediaStream(mmstream, NULL, &MSPID_PrimaryAudio, 0, &stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IMediaStream_QueryInterface(stream, &IID_IPin, (void **)&pin);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMultiMediaStream_GetFilterGraph(mmstream, &graph);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(graph != NULL, "Expected non-null graph\n");
+
+    testfilter_init(&source);
+
+    hr = IGraphBuilder_AddFilter(graph, &source.filter.IBaseFilter_iface, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IPin_ReceiveConnection(pin, &source.source.pin.IPin_iface, media_type);
+    ok(hr == expected_hr, "Got hr %#x.\n", hr);
+
+    if (SUCCEEDED(hr))
+    {
+        hr = IPin_Disconnect(pin);
+        ok(hr == S_OK, "Got hr %#x.\n", hr);
+    }
+
+    ref = IAMMultiMediaStream_Release(mmstream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IGraphBuilder_Release(graph);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    IPin_Release(pin);
+    ref = IMediaStream_Release(stream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IBaseFilter_Release(&source.filter.IBaseFilter_iface);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+}
+
+static void test_audiostream_receive_connection(void)
+{
+    IAMMultiMediaStream *mmstream;
+    IGraphBuilder *graph = NULL;
+    struct testfilter source;
+    IMediaStream *stream = NULL;
+    IAudioMediaStream *audio_stream = NULL;
+    IPin *pin = NULL;
+    WAVEFORMATPCMEX valid_format = {0};
+    WAVEFORMATPCMEX format;
+    AM_MEDIA_TYPE valid_media_type = {0};
+    AM_MEDIA_TYPE media_type;
+    HRESULT hr;
+    ULONG ref;
+
+    valid_format.Format.wFormatTag = WAVE_FORMAT_PCM;
+    valid_format.Format.nChannels = 2;
+    valid_format.Format.nSamplesPerSec = 44100;
+    valid_format.Format.nAvgBytesPerSec = 176400;
+    valid_format.Format.nBlockAlign = 4;
+    valid_format.Format.wBitsPerSample = 16;
+    valid_format.Format.cbSize = 0;
+
+    valid_media_type.majortype = MEDIATYPE_Audio;
+    valid_media_type.subtype = MEDIASUBTYPE_PCM;
+    valid_media_type.bFixedSizeSamples = TRUE;
+    valid_media_type.bTemporalCompression = FALSE;
+    valid_media_type.lSampleSize = 2;
+    valid_media_type.formattype = FORMAT_WaveFormatEx;
+    valid_media_type.pUnk = NULL;
+    valid_media_type.cbFormat = sizeof(WAVEFORMATEX);
+    valid_media_type.pbFormat = (BYTE *)&valid_format;
+
+    check_audiostream_media_type(&valid_media_type, S_OK);
+
+    media_type = valid_media_type;
+    media_type.majortype = GUID_NULL;
+    check_audiostream_media_type(&media_type, VFW_E_TYPE_NOT_ACCEPTED);
+
+    media_type = valid_media_type;
+    media_type.subtype = MEDIASUBTYPE_RGB24;
+    check_audiostream_media_type(&media_type, S_OK);
+
+    media_type = valid_media_type;
+    media_type.formattype = GUID_NULL;
+    check_audiostream_media_type(&media_type, VFW_E_TYPE_NOT_ACCEPTED);
+
+    media_type = valid_media_type;
+    media_type.cbFormat = sizeof(WAVEFORMATEX) - 1;
+    check_audiostream_media_type(&media_type, VFW_E_TYPE_NOT_ACCEPTED);
+
+    format = valid_format;
+    format.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    format.Format.cbSize = 22;
+    format.Samples.wValidBitsPerSample = 16;
+    format.dwChannelMask = KSAUDIO_SPEAKER_STEREO;
+    format.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+    media_type = valid_media_type;
+    media_type.cbFormat = sizeof(format);
+    media_type.pbFormat = (BYTE *)&format;
+    check_audiostream_media_type(&media_type, E_INVALIDARG);
+
+    mmstream = create_ammultimediastream();
+
+    hr = IAMMultiMediaStream_Initialize(mmstream, STREAMTYPE_READ, 0, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMultiMediaStream_AddMediaStream(mmstream, NULL, &MSPID_PrimaryAudio, 0, &stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IMediaStream_QueryInterface(stream, &IID_IAudioMediaStream, (void **)&audio_stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IMediaStream_QueryInterface(stream, &IID_IPin, (void **)&pin);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMultiMediaStream_GetFilterGraph(mmstream, &graph);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(graph != NULL, "Expected non-null graph\n");
+
+    testfilter_init(&source);
+
+    hr = IGraphBuilder_AddFilter(graph, &source.filter.IBaseFilter_iface, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAudioMediaStream_SetFormat(audio_stream, &valid_format.Format);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    format = valid_format;
+    format.Format.nChannels = 1;
+    media_type = valid_media_type;
+    media_type.pbFormat = (BYTE *)&format;
+    hr = IPin_ReceiveConnection(pin, &source.source.pin.IPin_iface, &media_type);
+    ok(hr == E_INVALIDARG, "Got hr %#x.\n", hr);
+
+    hr = IPin_ReceiveConnection(pin, &source.source.pin.IPin_iface, &valid_media_type);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IPin_Disconnect(pin);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    ref = IAMMultiMediaStream_Release(mmstream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IGraphBuilder_Release(graph);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    IPin_Release(pin);
+    IAudioMediaStream_Release(audio_stream);
+    ref = IMediaStream_Release(stream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IBaseFilter_Release(&source.filter.IBaseFilter_iface);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+}
+
 START_TEST(amstream)
 {
     HANDLE file;
@@ -2653,6 +2811,7 @@ START_TEST(amstream)
 
     test_audiostream_get_format();
     test_audiostream_set_format();
+    test_audiostream_receive_connection();
 
     CoUninitialize();
 }
