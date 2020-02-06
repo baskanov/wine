@@ -200,6 +200,7 @@ struct audio_stream
     IPin *peer;
     IMemAllocator *allocator;
     AM_MEDIA_TYPE mt;
+    WAVEFORMATEX format;
 };
 
 static inline struct audio_stream *impl_from_IAMMediaStream(IAMMediaStream *iface)
@@ -433,6 +434,58 @@ static const struct IAMMediaStreamVtbl audio_IAMMediaStream_vtbl =
     audio_IAMMediaStream_JoinFilterGraph,
 };
 
+static HRESULT is_media_type_compatible(const AM_MEDIA_TYPE *media_type, const WAVEFORMATEX *format)
+{
+    const WAVEFORMATEX *media_type_format;
+
+    if (!IsEqualGUID(&media_type->majortype, &MEDIATYPE_Audio))
+        return S_FALSE;
+
+    if (!IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_PCM))
+        return S_FALSE;
+
+    if (!IsEqualGUID(&media_type->formattype, &FORMAT_WaveFormatEx))
+        return S_FALSE;
+
+    if (!media_type->pbFormat)
+        return S_FALSE;
+
+    if (media_type->cbFormat < sizeof(WAVEFORMATEX))
+        return S_FALSE;
+
+    media_type_format = (const WAVEFORMATEX *)media_type->pbFormat;
+
+    if (media_type_format->wFormatTag != WAVE_FORMAT_PCM)
+        return S_FALSE;
+
+    if (format->wFormatTag == WAVE_FORMAT_PCM)
+    {
+        if (media_type_format->nChannels != format->nChannels)
+            return S_FALSE;
+
+        if (media_type_format->nSamplesPerSec != format->nSamplesPerSec)
+            return S_FALSE;
+
+        if (media_type_format->nAvgBytesPerSec != format->nAvgBytesPerSec)
+            return S_FALSE;
+
+        if (media_type_format->nBlockAlign != format->nBlockAlign)
+            return S_FALSE;
+
+        if (media_type_format->wBitsPerSample != format->wBitsPerSample)
+            return S_FALSE;
+    }
+
+    return S_OK;
+}
+
+static HRESULT is_format_valid(const WAVEFORMATEX *format)
+{
+    if (format->wFormatTag != WAVE_FORMAT_PCM)
+        return S_FALSE;
+    return S_OK;
+}
+
 static inline struct audio_stream *impl_from_IAudioMediaStream(IAudioMediaStream *iface)
 {
     return CONTAINING_RECORD(iface, struct audio_stream, IAudioMediaStream_iface);
@@ -555,9 +608,23 @@ static HRESULT WINAPI audio_IAudioMediaStream_SetFormat(IAudioMediaStream *iface
 {
     struct audio_stream *This = impl_from_IAudioMediaStream(iface);
 
-    FIXME("(%p/%p)->(%p) stub!\n", iface, This, wave_format);
+    TRACE("(%p/%p)->(%p)\n", iface, This, wave_format);
 
-    return E_NOTIMPL;
+    if (!wave_format)
+        return E_POINTER;
+
+    if (S_OK != is_format_valid(wave_format))
+        return E_INVALIDARG;
+
+    if (This->peer)
+    {
+        if (S_OK != is_media_type_compatible(&This->mt, wave_format))
+            return E_INVALIDARG;
+}
+
+    This->format = *wave_format;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI audio_IAudioMediaStream_CreateSample(IAudioMediaStream *iface, IAudioData *audio_data,
