@@ -30,7 +30,7 @@ static const WCHAR sink_id[] = L"I{A35FF56B-9FDA-11D0-8FDF-00C04FD9189D}";
 typedef struct {
     IAudioStreamSample IAudioStreamSample_iface;
     LONG ref;
-    IMediaStream *parent;
+    IAudioMediaStream *parent;
     IAudioData *audio_data;
 } IAudioStreamSampleImpl;
 
@@ -158,7 +158,7 @@ static HRESULT audiostreamsample_create(IAudioMediaStream *parent, IAudioData *a
 
     object->IAudioStreamSample_iface.lpVtbl = &AudioStreamSample_Vtbl;
     object->ref = 1;
-    object->parent = (IMediaStream*)parent;
+    object->parent = parent;
     object->audio_data = audio_data;
 
     *audio_stream_sample = &object->IAudioStreamSample_iface;
