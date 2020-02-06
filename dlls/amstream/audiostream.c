@@ -834,6 +834,12 @@ static HRESULT WINAPI audio_sink_ReceiveConnection(IPin *iface, IPin *peer, cons
         return VFW_E_ALREADY_CONNECTED;
     }
 
+    if (S_OK != is_media_type_compatible(mt, &stream->format))
+    {
+        LeaveCriticalSection(&stream->cs);
+        return VFW_E_TYPE_NOT_ACCEPTED;
+    }
+
     IPin_QueryDirection(peer, &dir);
     if (dir != PINDIR_OUTPUT)
     {
