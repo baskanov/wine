@@ -762,6 +762,17 @@ static HRESULT WINAPI audio_sink_ReceiveConnection(IPin *iface, IPin *peer, cons
         return VFW_E_INVALID_DIRECTION;
     }
 
+    if (!IsEqualGUID(&mt->majortype, &MEDIATYPE_Audio) ||
+        !IsEqualGUID(&mt->formattype, &FORMAT_WaveFormatEx) ||
+        !mt->pbFormat || mt->cbFormat < sizeof(WAVEFORMATEX))
+    {
+        LeaveCriticalSection(&stream->cs);
+        return VFW_E_TYPE_NOT_ACCEPTED;
+    }
+
+    if (!is_format_compatible(&stream->format, (const WAVEFORMATEX *)mt->pbFormat))
+        return E_INVALIDARG;
+
     CopyMediaType(&stream->mt, mt);
     IPin_AddRef(stream->peer = peer);
 
