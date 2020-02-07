@@ -164,8 +164,14 @@ static const struct IAudioStreamSampleVtbl AudioStreamSample_Vtbl =
 static HRESULT audiostreamsample_create(IAudioMediaStream *parent, IAudioData *audio_data, IAudioStreamSample **audio_stream_sample)
 {
     IAudioStreamSampleImpl *object;
+    WAVEFORMATEX format;
+    HRESULT hr;
 
     TRACE("(%p)\n", audio_stream_sample);
+
+    hr = IAudioData_GetFormat(audio_data, &format);
+    if (FAILED(hr))
+        return hr;
 
     object = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(IAudioStreamSampleImpl));
     if (!object)
@@ -177,6 +183,13 @@ static HRESULT audiostreamsample_create(IAudioMediaStream *parent, IAudioData *a
     object->audio_data = audio_data;
 
     IAudioData_AddRef(object->audio_data);
+
+    hr = IAudioMediaStream_SetFormat(parent, &format);
+    if (FAILED(hr))
+    {
+        IAudioStreamSample_Release(&object->IAudioStreamSample_iface);
+        return hr;
+    }
 
     *audio_stream_sample = &object->IAudioStreamSample_iface;
 
