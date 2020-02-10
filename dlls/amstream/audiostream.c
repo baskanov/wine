@@ -38,6 +38,8 @@ typedef struct {
 } IAudioStreamSampleImpl;
 
 static HRESULT audio_queue_sample(IAudioMediaStream *iface, IAudioStreamSampleImpl *sample);
+static HRESULT audio_get_update_status(IAudioMediaStream *iface, IAudioStreamSampleImpl *sample);
+
 static inline IAudioStreamSampleImpl *impl_from_IAudioStreamSample(IAudioStreamSample *iface)
 {
     return CONTAINING_RECORD(iface, IAudioStreamSampleImpl, IAudioStreamSample_iface);
@@ -171,9 +173,17 @@ static HRESULT WINAPI IAudioStreamSampleImpl_Update(IAudioStreamSample *iface, D
 
 static HRESULT WINAPI IAudioStreamSampleImpl_CompletionStatus(IAudioStreamSample *iface, DWORD flags, DWORD milliseconds)
 {
-    FIXME("(%p)->(%x,%u): stub\n", iface, flags, milliseconds);
+    IAudioStreamSampleImpl *This = impl_from_IAudioStreamSample(iface);
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%x,%u)\n", iface, flags, milliseconds);
+
+    if (flags)
+    {
+        FIXME("Unsupported flags: %x\n", flags);
+        return E_NOTIMPL;
+    }
+
+    return audio_get_update_status(This->parent, This);
 }
 
 /*** IAudioStreamSample methods ***/
@@ -674,6 +684,20 @@ static HRESULT audio_queue_sample(IAudioMediaStream *iface, IAudioStreamSampleIm
     SetEvent(stream->queued_event);
 
 out_critical_section:
+    LeaveCriticalSection(&stream->cs);
+
+    return hr;
+}
+
+static HRESULT audio_get_update_status(IAudioMediaStream *iface, IAudioStreamSampleImpl *sample)
+{
+    struct audio_stream *stream = impl_from_IAudioMediaStream(iface);
+    HRESULT hr;
+
+    EnterCriticalSection(&stream->cs);
+
+    hr = sample->update_result;
+
     LeaveCriticalSection(&stream->cs);
 
     return hr;
