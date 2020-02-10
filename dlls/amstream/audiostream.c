@@ -412,6 +412,25 @@ static HRESULT WINAPI audio_IAMMediaStream_Initialize(IAMMediaStream *iface, IUn
     return S_FALSE;
 }
 
+static void flush_queued_samples(struct audio_stream *stream, HRESULT update_result)
+{
+    while (!list_empty(&stream->queue))
+    {
+        DWORD actual_length = 0;
+        IAudioStreamSampleImpl *sample =
+            LIST_ENTRY(list_head(&stream->queue), IAudioStreamSampleImpl, entry);
+
+        list_remove(&sample->entry);
+
+        sample->update_result = IAudioData_GetInfo(sample->audio_data, NULL, NULL, &actual_length);
+        if (SUCCEEDED(sample->update_result))
+            sample->update_result = actual_length > 0 ? S_OK : update_result;
+
+        SetEvent(sample->updated_event);
+        IAudioStreamSample_Release(&sample->IAudioStreamSample_iface);
+    }
+}
+
 static HRESULT WINAPI audio_IAMMediaStream_SetState(IAMMediaStream *iface, FILTER_STATE state)
 {
     struct audio_stream *This = impl_from_IAMMediaStream(iface);
@@ -427,6 +446,9 @@ static HRESULT WINAPI audio_IAMMediaStream_SetState(IAMMediaStream *iface, FILTE
     switch (state)
     {
     case State_Stopped:
+        flush_queued_samples(This, MS_E_NOTRUNNING);
+        SetEvent(This->queued_event);
+        break;
     case State_Paused:
     case State_Running:
         break;
