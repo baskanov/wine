@@ -264,6 +264,7 @@ struct audio_stream
     WAVEFORMATEX format;
     FILTER_STATE state;
     BOOL eos;
+    BOOL flushing;
     struct list queue;
     HANDLE queued_event;
 };
@@ -1084,30 +1085,58 @@ static HRESULT WINAPI audio_sink_QueryInternalConnections(IPin *iface, IPin **pi
 static HRESULT WINAPI audio_sink_EndOfStream(IPin *iface)
 {
     struct audio_stream *stream = impl_from_IPin(iface);
+    HRESULT hr = S_OK;
 
     TRACE("(%p/%p)->()\n", iface, stream);
 
     EnterCriticalSection(&stream->cs);
 
+    if (stream->flushing)
+    {
+        hr = S_FALSE;
+        goto out_critical_section;
+    }
+
     stream->eos = TRUE;
 
     flush_queued_samples(stream, MS_S_ENDOFSTREAM);
+
+out_critical_section:
+    LeaveCriticalSection(&stream->cs);
+
+    return hr;
+}
+
+static HRESULT WINAPI audio_sink_BeginFlush(IPin *iface)
+{
+    struct audio_stream *stream = impl_from_IPin(iface);
+
+    TRACE("iface %p\n", iface);
+
+    EnterCriticalSection(&stream->cs);
+
+    stream->flushing = TRUE;
+    SetEvent(stream->queued_event);
 
     LeaveCriticalSection(&stream->cs);
 
     return S_OK;
 }
 
-static HRESULT WINAPI audio_sink_BeginFlush(IPin *iface)
-{
-    FIXME("iface %p, stub!\n", iface);
-    return E_NOTIMPL;
-}
-
 static HRESULT WINAPI audio_sink_EndFlush(IPin *iface)
 {
-    FIXME("iface %p, stub!\n", iface);
-    return E_NOTIMPL;
+    struct audio_stream *stream = impl_from_IPin(iface);
+
+    TRACE("iface %p\n", iface);
+
+    EnterCriticalSection(&stream->cs);
+
+    stream->flushing = FALSE;
+    stream->eos = FALSE;
+
+    LeaveCriticalSection(&stream->cs);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI audio_sink_NewSegment(IPin *iface, REFERENCE_TIME start, REFERENCE_TIME stop, double rate)
