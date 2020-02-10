@@ -265,6 +265,7 @@ struct audio_stream
     AM_MEDIA_TYPE mt;
     WAVEFORMATEX format;
     FILTER_STATE state;
+    BOOL eos;
     struct list queue;
     HANDLE queued_event;
 };
@@ -461,6 +462,8 @@ static HRESULT WINAPI audio_IAMMediaStream_SetState(IAMMediaStream *iface, FILTE
         break;
     case State_Paused:
     case State_Running:
+        if (State_Stopped == This->state)
+            This->eos = FALSE;
         break;
     default:
         hr = E_INVALIDARG;
@@ -1089,8 +1092,19 @@ static HRESULT WINAPI audio_sink_QueryInternalConnections(IPin *iface, IPin **pi
 
 static HRESULT WINAPI audio_sink_EndOfStream(IPin *iface)
 {
-    FIXME("iface %p, stub!\n", iface);
-    return E_NOTIMPL;
+    struct audio_stream *stream = impl_from_IPin(iface);
+
+    TRACE("(%p/%p)->()\n", iface, stream);
+
+    EnterCriticalSection(&stream->cs);
+
+    stream->eos = TRUE;
+
+    flush_queued_samples(stream, MS_S_ENDOFSTREAM);
+
+    LeaveCriticalSection(&stream->cs);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI audio_sink_BeginFlush(IPin *iface)
