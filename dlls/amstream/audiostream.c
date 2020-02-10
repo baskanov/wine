@@ -1178,10 +1178,91 @@ static HRESULT WINAPI audio_meminput_GetAllocatorRequirements(IMemInputPin *ifac
     return E_NOTIMPL;
 }
 
+static void update_queued_sample(IAudioStreamSampleImpl *sample, DWORD input_length, BYTE *input_pointer, DWORD *input_position)
+{
+    DWORD output_length = 0;
+    BYTE *output_pointer = NULL;
+    DWORD output_position = 0;
+    DWORD advance = 0;
+
+    sample->update_result = IAudioData_GetInfo(sample->audio_data, &output_length, &output_pointer, &output_position);
+    if (FAILED(sample->update_result))
+        return;
+
+    advance = min(input_length - *input_position, output_length - output_position);
+    CopyMemory(&output_pointer[output_position], &input_pointer[*input_position], advance);
+
+    *input_position += advance;
+    output_position += advance;
+
+    sample->update_result = IAudioData_SetActual(sample->audio_data, output_position);
+    if (FAILED(sample->update_result))
+        return;
+
+    sample->update_result = (output_position == output_length) ? S_OK : MS_S_PENDING;
+}
+
+static HRESULT update_queued_samples(struct audio_stream *stream, DWORD input_length, BYTE *input_pointer, DWORD *input_position)
+{
+    HRESULT hr = S_OK;
+
+    EnterCriticalSection(&stream->cs);
+
+    if (stream->state == State_Stopped)
+    {
+        hr = VFW_E_WRONG_STATE;
+        goto out_critical_section;
+    }
+    if (stream->eos)
+    {
+        hr = S_FALSE;
+        goto out_critical_section;
+    }
+
+    while (!list_empty(&stream->queue) && *input_position < input_length)
+    {
+        IAudioStreamSampleImpl *sample =
+            LIST_ENTRY(list_head(&stream->queue), IAudioStreamSampleImpl, entry);
+
+        update_queued_sample(sample, input_length, input_pointer, input_position);
+        if (MS_S_PENDING != sample->update_result)
+        {
+            list_remove(&sample->entry);
+            SetEvent(sample->updated_event);
+            IAudioStreamSample_Release(&sample->IAudioStreamSample_iface);
+        }
+    }
+
+out_critical_section:
+    LeaveCriticalSection(&stream->cs);
+
+    return hr;
+}
+
 static HRESULT WINAPI audio_meminput_Receive(IMemInputPin *iface, IMediaSample *sample)
 {
-    FIXME("iface %p, sample %p, stub!\n", iface, sample);
-    return E_NOTIMPL;
+    struct audio_stream *stream = impl_from_IMemInputPin(iface);
+    HRESULT hr;
+    DWORD input_length = 0;
+    BYTE *input_pointer = NULL;
+    DWORD input_position = 0;
+
+    TRACE("(%p)->(%p)\n", stream, sample);
+
+    hr = IMediaSample_GetPointer(sample, &input_pointer);
+    if (FAILED(hr))
+        return hr;
+    input_length = IMediaSample_GetActualDataLength(sample);
+
+    for (;;)
+    {
+        hr = update_queued_samples(stream, input_length, input_pointer, &input_position);
+        if (S_OK != hr || input_position == input_length)
+            break;
+        WaitForSingleObject(stream->queued_event, INFINITE);
+    }
+
+    return hr;
 }
 
 static HRESULT WINAPI audio_meminput_ReceiveMultiple(IMemInputPin *iface,
