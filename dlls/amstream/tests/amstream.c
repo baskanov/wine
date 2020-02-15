@@ -2301,6 +2301,340 @@ out_unknown:
     IUnknown_Release(unknown);
 }
 
+static LONG filter_ref_count = 1;
+
+static HRESULT WINAPI filter_QueryInterface(IBaseFilter *iface, REFIID riid, void **ret_iface)
+{
+    if (IsEqualGUID(&IID_IUnknown, riid) || IsEqualGUID(&IID_IPersist, riid) ||
+        IsEqualGUID(&IID_IMediaFilter, riid) || IsEqualGUID(&IID_IBaseFilter, riid))
+    {
+        *ret_iface = iface;
+        IBaseFilter_AddRef(iface);
+        return S_OK;
+    }
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI filter_AddRef(IBaseFilter *iface)
+{
+    return InterlockedIncrement(&filter_ref_count);
+}
+
+static ULONG WINAPI filter_Release(IBaseFilter *iface)
+{
+    return InterlockedDecrement(&filter_ref_count);
+}
+
+static HRESULT WINAPI filter_GetClassID(IBaseFilter *iface, CLSID *clsid)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI filter_Stop(IBaseFilter *iface)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI filter_Pause(IBaseFilter *iface)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI filter_Run(IBaseFilter *iface, REFERENCE_TIME start)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI filter_GetState(IBaseFilter *iface, DWORD timeout, FILTER_STATE *state)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI filter_SetSyncSource(IBaseFilter *iface, IReferenceClock *clock)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI filter_GetSyncSource(IBaseFilter *iface, IReferenceClock **clock)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI filter_EnumPins(IBaseFilter *iface, IEnumPins **enum_pins)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI filter_FindPin(IBaseFilter *iface, const WCHAR *id, IPin **out)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI filter_QueryFilterInfo(IBaseFilter *iface, FILTER_INFO *info)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI filter_JoinFilterGraph(IBaseFilter *iface,
+        IFilterGraph *graph, const WCHAR *name)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI filter_QueryVendorInfo(IBaseFilter *iface, LPWSTR *vendor_info)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static const IBaseFilterVtbl filter_vtbl =
+{
+    filter_QueryInterface,
+    filter_AddRef,
+    filter_Release,
+    filter_GetClassID,
+    filter_Stop,
+    filter_Pause,
+    filter_Run,
+    filter_GetState,
+    filter_SetSyncSource,
+    filter_GetSyncSource,
+    filter_EnumPins,
+    filter_FindPin,
+    filter_QueryFilterInfo,
+    filter_JoinFilterGraph,
+    filter_QueryVendorInfo,
+};
+
+static IBaseFilter filter = {&filter_vtbl};
+
+static LONG output_pin_ref_count = 1;
+
+static HRESULT WINAPI output_pin_QueryInterface(IPin *iface, REFIID iid, void **out)
+{
+    if (IsEqualGUID(&IID_IUnknown, iid) || IsEqualGUID(&IID_IPin, iid))
+    {
+        *out = iface;
+        IPin_AddRef(iface);
+        return S_OK;
+    }
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI output_pin_AddRef(IPin *iface)
+{
+    return InterlockedIncrement(&output_pin_ref_count);
+}
+
+static ULONG WINAPI output_pin_Release(IPin *iface)
+{
+    return InterlockedDecrement(&output_pin_ref_count);
+}
+
+static HRESULT WINAPI output_pin_Connect(IPin *iface, IPin *peer, const AM_MEDIA_TYPE *mt)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI output_pin_ReceiveConnection(IPin *iface, IPin *peer, const AM_MEDIA_TYPE *mt)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI output_pin_Disconnect(IPin *iface)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI output_pin_ConnectedTo(IPin *iface, IPin **peer)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI output_pin_ConnectionMediaType(IPin *iface, AM_MEDIA_TYPE *mt)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI output_pin_QueryPinInfo(IPin *iface, PIN_INFO *info)
+{
+    if (winetest_debug > 1) trace("QueryPinInfo\n");
+    info->pFilter = &filter;
+    info->dir = PINDIR_OUTPUT;
+    lstrcpyW(info->achName, L"output");
+    IBaseFilter_AddRef(info->pFilter);
+    return S_OK;
+}
+
+static HRESULT WINAPI output_pin_QueryDirection(IPin *iface, PIN_DIRECTION *dir)
+{
+    if (winetest_debug > 1) trace("QueryDirection\n");
+    *dir = PINDIR_OUTPUT;
+    return S_OK;
+}
+
+static HRESULT WINAPI output_pin_QueryId(IPin *iface, WCHAR **id)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI output_pin_QueryAccept(IPin *iface, const AM_MEDIA_TYPE *mt)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI output_pin_EnumMediaTypes(IPin *iface, IEnumMediaTypes **out)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI output_pin_QueryInternalConnections(IPin *iface, IPin **pins, ULONG *count)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI output_pin_EndOfStream(IPin *iface)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI output_pin_BeginFlush(IPin *iface)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI output_pin_EndFlush(IPin *iface)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI output_pin_NewSegment(IPin *iface, REFERENCE_TIME start, REFERENCE_TIME stop, double rate)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static const IPinVtbl output_pin_vtbl =
+{
+    output_pin_QueryInterface,
+    output_pin_AddRef,
+    output_pin_Release,
+    output_pin_Connect,
+    output_pin_ReceiveConnection,
+    output_pin_Disconnect,
+    output_pin_ConnectedTo,
+    output_pin_ConnectionMediaType,
+    output_pin_QueryPinInfo,
+    output_pin_QueryDirection,
+    output_pin_QueryId,
+    output_pin_QueryAccept,
+    output_pin_EnumMediaTypes,
+    output_pin_QueryInternalConnections,
+    output_pin_EndOfStream,
+    output_pin_BeginFlush,
+    output_pin_EndFlush,
+    output_pin_NewSegment,
+};
+
+static IPin output_pin = {&output_pin_vtbl};
+
+static void test_audiostream_get_format(void)
+{
+    IAMMultiMediaStream *mmstream = create_ammultimediastream();
+    IMediaStream *stream = NULL;
+    IAudioMediaStream *audio_stream = NULL;
+    IPin *pin = NULL;
+    WAVEFORMATEX stream_format = {0};
+    WAVEFORMATEX media_type_format = {0};
+    AM_MEDIA_TYPE media_type = {0};
+    HRESULT hr;
+
+    hr = IAMMultiMediaStream_AddMediaStream(mmstream, NULL, &MSPID_PrimaryAudio, 0, &stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IMediaStream_QueryInterface(stream, &IID_IAudioMediaStream, (void **)&audio_stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IMediaStream_QueryInterface(stream, &IID_IPin, (void **)&pin);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAudioMediaStream_GetFormat(audio_stream, NULL);
+    ok(hr == E_POINTER, "Got hr %#x.\n", hr);
+
+    hr = IAudioMediaStream_GetFormat(audio_stream, &stream_format);
+    ok(hr == MS_E_NOSTREAM, "Got hr %#x.\n", hr);
+
+    media_type_format.wFormatTag = WAVE_FORMAT_PCM;
+    media_type_format.nChannels = 2;
+    media_type_format.nSamplesPerSec = 44100;
+    media_type_format.nAvgBytesPerSec = 176400;
+    media_type_format.nBlockAlign = 4;
+    media_type_format.wBitsPerSample = 16;
+    media_type_format.cbSize = 0;
+
+    media_type.majortype = MEDIATYPE_Audio;
+    media_type.subtype = MEDIASUBTYPE_PCM;
+    media_type.bFixedSizeSamples = TRUE;
+    media_type.bTemporalCompression = FALSE;
+    media_type.lSampleSize = 2;
+    media_type.formattype = FORMAT_WaveFormatEx;
+    media_type.pUnk = NULL;
+    media_type.cbFormat = sizeof(media_type_format);
+    media_type.pbFormat = (BYTE *)&media_type_format;
+
+    hr = IPin_ReceiveConnection(pin, &output_pin, &media_type);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    stream_format.wFormatTag = 0xdead;
+    stream_format.nChannels = 0xdead;
+    stream_format.nSamplesPerSec = 0xdeadbeef;
+    stream_format.nAvgBytesPerSec = 0xdeadbeef;
+    stream_format.nBlockAlign = 0xdead;
+    stream_format.wBitsPerSample = 0xdead;
+    stream_format.cbSize = 0xdead;
+    hr = IAudioMediaStream_GetFormat(audio_stream, &stream_format);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(WAVE_FORMAT_PCM == stream_format.wFormatTag, "got %u\n", stream_format.wFormatTag);
+    ok(2 == stream_format.nChannels, "got %u\n", stream_format.nChannels);
+    ok(44100 == stream_format.nSamplesPerSec, "got %u\n", stream_format.nSamplesPerSec);
+    ok(176400 == stream_format.nAvgBytesPerSec, "got %u\n", stream_format.nAvgBytesPerSec);
+    ok(4 == stream_format.nBlockAlign, "got %u\n", stream_format.nBlockAlign);
+    ok(16 == stream_format.wBitsPerSample, "got %u\n", stream_format.wBitsPerSample);
+    ok(0 == stream_format.cbSize, "got %u\n", stream_format.cbSize);
+
+    hr = IPin_Disconnect(pin);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAudioMediaStream_GetFormat(audio_stream, &stream_format);
+    ok(hr == MS_E_NOSTREAM, "Got hr %#x.\n", hr);
+
+    IPin_Release(pin);
+    IAudioMediaStream_Release(audio_stream);
+    IMediaStream_Release(stream);
+    IAMMultiMediaStream_Release(mmstream);
+}
+
 START_TEST(amstream)
 {
     HANDLE file;
@@ -2333,6 +2667,8 @@ START_TEST(amstream)
     test_audiodata_set_actual();
     test_audiodata_get_format();
     test_audiodata_set_format();
+
+    test_audiostream_get_format();
 
     CoUninitialize();
 }
