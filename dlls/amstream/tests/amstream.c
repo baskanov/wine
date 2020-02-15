@@ -27,6 +27,7 @@
 #include "ks.h"
 #include "initguid.h"
 #include "ksmedia.h"
+#include "wine/strmbase.h"
 
 static const WCHAR primary_video_sink_id[] = L"I{A35FF56A-9FDA-11D0-8FDF-00C04FD9189D}";
 static const WCHAR primary_audio_sink_id[] = L"I{A35FF56B-9FDA-11D0-8FDF-00C04FD9189D}";
@@ -2293,6 +2294,155 @@ out_unknown:
     IUnknown_Release(unknown);
 }
 
+struct testfilter
+{
+    struct strmbase_filter filter;
+    struct strmbase_source source;
+};
+
+static inline struct testfilter *impl_from_BaseFilter(struct strmbase_filter *iface)
+{
+    return CONTAINING_RECORD(iface, struct testfilter, filter);
+}
+
+static struct strmbase_pin *testfilter_get_pin(struct strmbase_filter *iface, unsigned int index)
+{
+    struct testfilter *filter = impl_from_BaseFilter(iface);
+    if (!index)
+        return &filter->source.pin;
+    return NULL;
+}
+
+static void testfilter_destroy(struct strmbase_filter *iface)
+{
+    struct testfilter *filter = impl_from_BaseFilter(iface);
+    strmbase_source_cleanup(&filter->source);
+    strmbase_filter_cleanup(&filter->filter);
+}
+
+static const struct strmbase_filter_ops testfilter_ops =
+{
+    .filter_get_pin = testfilter_get_pin,
+    .filter_destroy = testfilter_destroy,
+};
+
+static HRESULT testsource_query_accept(struct strmbase_pin *iface, const AM_MEDIA_TYPE *mt)
+{
+    return S_OK;
+}
+
+static HRESULT WINAPI testsource_DecideAllocator(struct strmbase_source *iface,
+        IMemInputPin *peer, IMemAllocator **allocator)
+{
+    return S_OK;
+}
+
+static const struct strmbase_source_ops testsource_ops =
+{
+    .base.pin_query_accept = testsource_query_accept,
+    .base.pin_get_media_type = strmbase_pin_get_media_type,
+    .pfnAttemptConnection = BaseOutputPinImpl_AttemptConnection,
+    .pfnDecideAllocator = testsource_DecideAllocator,
+};
+
+static void testfilter_init(struct testfilter *filter)
+{
+    static const GUID clsid = {0xabacab};
+    strmbase_filter_init(&filter->filter, NULL, &clsid, &testfilter_ops);
+    strmbase_source_init(&filter->source, &filter->filter, L"", &testsource_ops);
+}
+
+static void test_audiostream_get_format(void)
+{
+    IAMMultiMediaStream *mmstream = create_ammultimediastream();
+    IGraphBuilder *graph = NULL;
+    struct testfilter source;
+    IMediaStream *stream = NULL;
+    IAudioMediaStream *audio_stream = NULL;
+    IPin *pin = NULL;
+    WAVEFORMATEX stream_format = {0};
+    WAVEFORMATEX media_type_format = {0};
+    AM_MEDIA_TYPE media_type = {0};
+    HRESULT hr;
+    ULONG ref;
+
+    hr = IAMMultiMediaStream_Initialize(mmstream, STREAMTYPE_READ, 0, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMultiMediaStream_AddMediaStream(mmstream, NULL, &MSPID_PrimaryAudio, 0, &stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IMediaStream_QueryInterface(stream, &IID_IAudioMediaStream, (void **)&audio_stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IMediaStream_QueryInterface(stream, &IID_IPin, (void **)&pin);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMultiMediaStream_GetFilterGraph(mmstream, &graph);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(graph != NULL, "Expected non-null graph\n");
+
+    testfilter_init(&source);
+
+    hr = IGraphBuilder_AddFilter(graph, &source.filter.IBaseFilter_iface, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAudioMediaStream_GetFormat(audio_stream, NULL);
+    ok(hr == E_POINTER, "Got hr %#x.\n", hr);
+
+    hr = IAudioMediaStream_GetFormat(audio_stream, &stream_format);
+    ok(hr == MS_E_NOSTREAM, "Got hr %#x.\n", hr);
+
+    media_type_format.wFormatTag = WAVE_FORMAT_PCM;
+    media_type_format.nChannels = 2;
+    media_type_format.nSamplesPerSec = 44100;
+    media_type_format.nAvgBytesPerSec = 176400;
+    media_type_format.nBlockAlign = 4;
+    media_type_format.wBitsPerSample = 16;
+    media_type_format.cbSize = 0;
+
+    media_type.majortype = MEDIATYPE_Audio;
+    media_type.subtype = MEDIASUBTYPE_PCM;
+    media_type.bFixedSizeSamples = TRUE;
+    media_type.bTemporalCompression = FALSE;
+    media_type.lSampleSize = 2;
+    media_type.formattype = FORMAT_WaveFormatEx;
+    media_type.pUnk = NULL;
+    media_type.cbFormat = sizeof(media_type_format);
+    media_type.pbFormat = (BYTE *)&media_type_format;
+
+    hr = IGraphBuilder_ConnectDirect(graph, &source.source.pin.IPin_iface, pin, &media_type);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    memset(&stream_format, 0xcc, sizeof(stream_format));
+    hr = IAudioMediaStream_GetFormat(audio_stream, &stream_format);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(stream_format.wFormatTag == WAVE_FORMAT_PCM, "Got wFormatTag %u\n", stream_format.wFormatTag);
+    ok(stream_format.nChannels == 2, "Got nChannels %u\n", stream_format.nChannels);
+    ok(stream_format.nSamplesPerSec == 44100, "Got nSamplesPerSec %u\n", stream_format.nSamplesPerSec);
+    ok(stream_format.nAvgBytesPerSec == 176400, "Got nAvgBytesPerSec %u\n", stream_format.nAvgBytesPerSec);
+    ok(stream_format.nBlockAlign == 4, "Got nBlockAlign %u\n", stream_format.nBlockAlign);
+    ok(stream_format.wBitsPerSample == 16, "Got wBitsPerSample %u\n", stream_format.wBitsPerSample);
+    ok(stream_format.cbSize == 0, "Got cbSize %u\n", stream_format.cbSize);
+
+    hr = IGraphBuilder_Disconnect(graph, pin);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IGraphBuilder_Disconnect(graph, &source.source.pin.IPin_iface);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAudioMediaStream_GetFormat(audio_stream, &stream_format);
+    ok(hr == MS_E_NOSTREAM, "Got hr %#x.\n", hr);
+
+    ref = IAMMultiMediaStream_Release(mmstream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IGraphBuilder_Release(graph);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    IPin_Release(pin);
+    IAudioMediaStream_Release(audio_stream);
+    ref = IMediaStream_Release(stream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IBaseFilter_Release(&source.filter.IBaseFilter_iface);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+}
+
 START_TEST(amstream)
 {
     HANDLE file;
@@ -2325,6 +2475,8 @@ START_TEST(amstream)
     test_audiodata_set_actual();
     test_audiodata_get_format();
     test_audiodata_set_format();
+
+    test_audiostream_get_format();
 
     CoUninitialize();
 }
