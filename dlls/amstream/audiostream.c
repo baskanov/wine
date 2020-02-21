@@ -183,6 +183,7 @@ struct audio_stream
     IPin *peer;
     IMemAllocator *allocator;
     AM_MEDIA_TYPE mt;
+    WAVEFORMATEX format;
 };
 
 static inline struct audio_stream *impl_from_IAMMediaStream(IAMMediaStream *iface)
@@ -522,10 +523,32 @@ static HRESULT WINAPI audio_IAudioMediaStream_GetFormat(IAudioMediaStream *iface
 static HRESULT WINAPI audio_IAudioMediaStream_SetFormat(IAudioMediaStream *iface, const WAVEFORMATEX *wave_format)
 {
     struct audio_stream *This = impl_from_IAudioMediaStream(iface);
+    const WAVEFORMATEX *ref_format;
 
-    FIXME("(%p/%p)->(%p) stub!\n", iface, This, wave_format);
+    TRACE("(%p/%p)->(%p)\n", iface, This, wave_format);
 
-    return E_NOTIMPL;
+    if (!wave_format)
+        return E_POINTER;
+
+    if (wave_format->wFormatTag != WAVE_FORMAT_PCM)
+        return E_INVALIDARG;
+
+    EnterCriticalSection(&This->cs);
+
+    ref_format = This->peer ? (WAVEFORMATEX *)This->mt.pbFormat : &This->format;
+
+    if (ref_format->wFormatTag == WAVE_FORMAT_PCM &&
+        memcmp(wave_format, ref_format, sizeof(WAVEFORMATEX)) != 0)
+    {
+        LeaveCriticalSection(&This->cs);
+        return E_INVALIDARG;
+    }
+
+    This->format = *wave_format;
+
+    LeaveCriticalSection(&This->cs);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI audio_IAudioMediaStream_CreateSample(IAudioMediaStream *iface, IAudioData *audio_data,
