@@ -186,17 +186,7 @@ typedef struct _IFilterGraphImpl {
     LONG ref;
     IUnknown *punkFilterMapper2;
 
-    /* We keep two lists of filters, one unsorted and one topologically sorted.
-     * The former is necessary for functions like IGraphBuilder::Connect() and
-     * IGraphBuilder::Render() that iterate through the filter list but may
-     * add to it while doing so; the latter is for functions like
-     * IMediaControl::Run() that should propagate messages to all filters
-     * (including unconnected ones) but must do so in topological order from
-     * sinks to sources. We can easily guarantee that the loop in Connect() will
-     * touch each filter exactly once so long as we aren't reordering it, but
-     * using the sorted filters list there would be hard. This seems to be the
-     * easiest and clearest solution. */
-    struct list filters, sorted_filters;
+    struct list filters;
     unsigned int name_index;
 
     IReferenceClock *refClock;
@@ -676,7 +666,6 @@ static HRESULT WINAPI FilterGraph2_AddFilter(IFilterGraph2 *iface,
 
     IBaseFilter_AddRef(entry->filter = filter);
     list_add_head(&graph->filters, &entry->entry);
-    list_add_head(&graph->sorted_filters, &entry->sorted_entry);
     entry->sorting = FALSE;
     ++graph->version;
 
@@ -761,7 +750,6 @@ static HRESULT WINAPI FilterGraph2_RemoveFilter(IFilterGraph2 *iface, IBaseFilte
                 IBaseFilter_SetSyncSource(pFilter, NULL);
                 IBaseFilter_Release(pFilter);
                 list_remove(&entry->entry);
-                list_remove(&entry->sorted_entry);
                 CoTaskMemFree(entry->name);
                 heap_free(entry);
                 This->version++;
@@ -886,11 +874,11 @@ out:
 #endif
 }
 
-static struct filter *find_sorted_filter(IFilterGraphImpl *graph, IBaseFilter *iface)
+static struct filter *find_sorted_filter(struct list *sorted_filters, IBaseFilter *iface)
 {
     struct filter *filter;
 
-    LIST_FOR_EACH_ENTRY(filter, &graph->sorted_filters, struct filter, sorted_entry)
+    LIST_FOR_EACH_ENTRY(filter, sorted_filters, struct filter, sorted_entry)
     {
         if (filter->filter == iface)
             return filter;
@@ -899,7 +887,7 @@ static struct filter *find_sorted_filter(IFilterGraphImpl *graph, IBaseFilter *i
     return NULL;
 }
 
-static void sort_filter_recurse(IFilterGraphImpl *graph, struct filter *filter, struct list *sorted)
+static void sort_filter_recurse(struct list *sorted_filters, struct filter *filter, struct list *sorted)
 {
     struct filter *peer_filter;
     IEnumPins *enumpins;
@@ -923,8 +911,8 @@ static void sort_filter_recurse(IFilterGraphImpl *graph, struct filter *filter, 
         {
             IPin_QueryPinInfo(peer, &info);
             /* Note that the filter may have already been sorted. */
-            if ((peer_filter = find_sorted_filter(graph, info.pFilter)))
-                sort_filter_recurse(graph, peer_filter, sorted);
+            if ((peer_filter = find_sorted_filter(sorted_filters, info.pFilter)))
+                sort_filter_recurse(sorted_filters, peer_filter, sorted);
             IBaseFilter_Release(info.pFilter);
             IPin_Release(peer);
         }
@@ -938,17 +926,25 @@ static void sort_filter_recurse(IFilterGraphImpl *graph, struct filter *filter, 
     list_add_head(sorted, &filter->sorted_entry);
 }
 
-static void sort_filters(IFilterGraphImpl *graph)
+static void sort_filters(IFilterGraphImpl *graph, struct list *sorted_filters)
 {
     struct list sorted = LIST_INIT(sorted), *cursor;
+    struct filter *filter;
 
-    while ((cursor = list_head(&graph->sorted_filters)))
+    list_init(sorted_filters);
+
+    LIST_FOR_EACH_ENTRY(filter, &graph->filters, struct filter, entry)
     {
-        struct filter *filter = LIST_ENTRY(cursor, struct filter, sorted_entry);
-        sort_filter_recurse(graph, filter, &sorted);
+        list_add_tail(sorted_filters, &filter->sorted_entry);
     }
 
-    list_move_tail(&graph->sorted_filters, &sorted);
+    while ((cursor = list_head(sorted_filters)))
+    {
+        filter = LIST_ENTRY(cursor, struct filter, sorted_entry);
+        sort_filter_recurse(sorted_filters, filter, &sorted);
+    }
+
+    list_move_tail(sorted_filters, &sorted);
 }
 
 /* NOTE: despite the implication, it doesn't matter which
@@ -1000,9 +996,6 @@ static HRESULT WINAPI FilterGraph2_ConnectDirect(IFilterGraph2 *iface, IPin *ppi
                 hr = IPin_Connect(ppinIn, ppinOut, pmt);
         }
     }
-
-    if (SUCCEEDED(hr))
-        sort_filters(This);
 
     return hr;
 }
@@ -5144,6 +5137,7 @@ static HRESULT WINAPI MediaFilter_Stop(IMediaFilter *iface)
 {
     IFilterGraphImpl *graph = impl_from_IMediaFilter(iface);
     HRESULT hr = S_OK, filter_hr;
+    struct list sorted_filters;
     struct filter *filter;
 
     TRACE("graph %p.\n", graph);
@@ -5156,9 +5150,11 @@ static HRESULT WINAPI MediaFilter_Stop(IMediaFilter *iface)
         return S_OK;
     }
 
+    sort_filters(graph, &sorted_filters);
+
     if (graph->state == State_Running)
     {
-        LIST_FOR_EACH_ENTRY(filter, &graph->sorted_filters, struct filter, sorted_entry)
+        LIST_FOR_EACH_ENTRY(filter, &sorted_filters, struct filter, sorted_entry)
         {
             filter_hr = IBaseFilter_Pause(filter->filter);
             if (hr == S_OK)
@@ -5166,7 +5162,7 @@ static HRESULT WINAPI MediaFilter_Stop(IMediaFilter *iface)
         }
     }
 
-    LIST_FOR_EACH_ENTRY(filter, &graph->sorted_filters, struct filter, sorted_entry)
+    LIST_FOR_EACH_ENTRY(filter, &sorted_filters, struct filter, sorted_entry)
     {
         filter_hr = IBaseFilter_Stop(filter->filter);
         if (hr == S_OK)
@@ -5187,6 +5183,7 @@ static HRESULT WINAPI MediaFilter_Pause(IMediaFilter *iface)
 {
     IFilterGraphImpl *graph = impl_from_IMediaFilter(iface);
     HRESULT hr = S_OK, filter_hr;
+    struct list sorted_filters;
     struct filter *filter;
 
     TRACE("graph %p.\n", graph);
@@ -5199,6 +5196,8 @@ static HRESULT WINAPI MediaFilter_Pause(IMediaFilter *iface)
         return S_OK;
     }
 
+    sort_filters(graph, &sorted_filters);
+
     if (graph->defaultclock && !graph->refClock)
         IFilterGraph2_SetDefaultSyncSource(&graph->IFilterGraph2_iface);
 
@@ -5210,7 +5209,7 @@ static HRESULT WINAPI MediaFilter_Pause(IMediaFilter *iface)
         graph->current_pos += graph->stream_elapsed;
     }
 
-    LIST_FOR_EACH_ENTRY(filter, &graph->sorted_filters, struct filter, sorted_entry)
+    LIST_FOR_EACH_ENTRY(filter, &sorted_filters, struct filter, sorted_entry)
     {
         filter_hr = IBaseFilter_Pause(filter->filter);
         if (hr == S_OK)
@@ -5228,6 +5227,7 @@ static HRESULT WINAPI MediaFilter_Run(IMediaFilter *iface, REFERENCE_TIME start)
     IFilterGraphImpl *graph = impl_from_IMediaFilter(iface);
     REFERENCE_TIME stream_start = start;
     HRESULT hr = S_OK, filter_hr;
+    struct list sorted_filters;
     struct filter *filter;
 
     TRACE("graph %p, start %s.\n", graph, debugstr_time(start));
@@ -5241,6 +5241,8 @@ static HRESULT WINAPI MediaFilter_Run(IMediaFilter *iface, REFERENCE_TIME start)
     }
     graph->EcCompleteCount = 0;
 
+    sort_filters(graph, &sorted_filters);
+
     if (graph->defaultclock && !graph->refClock)
         IFilterGraph2_SetDefaultSyncSource(&graph->IFilterGraph2_iface);
 
@@ -5252,7 +5254,7 @@ static HRESULT WINAPI MediaFilter_Run(IMediaFilter *iface, REFERENCE_TIME start)
             stream_start += 500000;
     }
 
-    LIST_FOR_EACH_ENTRY(filter, &graph->sorted_filters, struct filter, sorted_entry)
+    LIST_FOR_EACH_ENTRY(filter, &sorted_filters, struct filter, sorted_entry)
     {
         filter_hr = IBaseFilter_Run(filter->filter, stream_start);
         if (hr == S_OK)
@@ -5270,6 +5272,7 @@ static HRESULT WINAPI MediaFilter_GetState(IMediaFilter *iface, DWORD timeout, F
     IFilterGraphImpl *graph = impl_from_IMediaFilter(iface);
     DWORD end = GetTickCount() + timeout;
     HRESULT hr = S_OK, filter_hr;
+    struct list sorted_filters;
     struct filter *filter;
 
     TRACE("graph %p, timeout %u, state %p.\n", graph, timeout, state);
@@ -5279,9 +5282,11 @@ static HRESULT WINAPI MediaFilter_GetState(IMediaFilter *iface, DWORD timeout, F
 
     EnterCriticalSection(&graph->cs);
 
+    sort_filters(graph, &sorted_filters);
+
     *state = graph->state;
 
-    LIST_FOR_EACH_ENTRY(filter, &graph->sorted_filters, struct filter, sorted_entry)
+    LIST_FOR_EACH_ENTRY(filter, &sorted_filters, struct filter, sorted_entry)
     {
         FILTER_STATE filter_state;
         int wait;
@@ -5702,7 +5707,6 @@ static HRESULT filter_graph_common_create(IUnknown *outer, IUnknown **out, BOOL 
     fimpl->IGraphVersion_iface.lpVtbl = &IGraphVersion_VTable;
     fimpl->ref = 1;
     list_init(&fimpl->filters);
-    list_init(&fimpl->sorted_filters);
     fimpl->name_index = 1;
     fimpl->refClock = NULL;
     fimpl->hEventCompletion = CreateEventW(0, TRUE, FALSE, 0);
