@@ -1381,6 +1381,15 @@ static HRESULT gstdemux_init_stream(struct strmbase_filter *iface)
     if (!filter->container)
         return VFW_E_NOT_CONNECTED;
 
+    for (i = 0; i < filter->source_count; ++i)
+    {
+        if (SUCCEEDED(pin_hr = BaseOutputPinImpl_Active(&filter->sources[i]->pin)))
+            hr = pin_hr;
+    }
+
+    if (FAILED(hr))
+        return E_FAIL;
+
     if (filter->no_more_pads_event)
         ResetEvent(filter->no_more_pads_event);
 
@@ -1412,11 +1421,6 @@ static HRESULT gstdemux_init_stream(struct strmbase_filter *iface)
                 stop_type, seeking->llStop * 100));
     }
 
-    for (i = 0; i < filter->source_count; ++i)
-    {
-        if (SUCCEEDED(pin_hr = BaseOutputPinImpl_Active(&filter->sources[i]->pin)))
-            hr = pin_hr;
-    }
     return hr;
 }
 
