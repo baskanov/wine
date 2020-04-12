@@ -27,6 +27,17 @@ WINE_DEFAULT_DEBUG_CHANNEL(amstream);
 
 static const WCHAR sink_id[] = L"I{A35FF56B-9FDA-11D0-8FDF-00C04FD9189D}";
 
+enum queued_event_type
+{
+    QET_END_OF_STREAM
+};
+
+struct queued_event
+{
+    struct list entry;
+    enum queued_event_type type;
+};
+
 struct audio_stream
 {
     IAMMediaStream IAMMediaStream_iface;
@@ -46,6 +57,8 @@ struct audio_stream
     AM_MEDIA_TYPE mt;
     WAVEFORMATEX format;
     FILTER_STATE state;
+    BOOL eos;
+    struct list event_queue;
 };
 
 typedef struct {
@@ -54,6 +67,23 @@ typedef struct {
     struct audio_stream *parent;
     IAudioData *audio_data;
 } IAudioStreamSampleImpl;
+
+static void remove_queued_event(struct queued_event *event)
+{
+    list_remove(&event->entry);
+    HeapFree(GetProcessHeap(), 0, event);
+}
+
+static void flush_event_queue(struct audio_stream *stream)
+{
+    while (!list_empty(&stream->event_queue))
+    {
+        struct queued_event *event =
+            LIST_ENTRY(list_head(&stream->event_queue), struct queued_event, entry);
+
+        remove_queued_event(event);
+    }
+}
 
 static inline IAudioStreamSampleImpl *impl_from_IAudioStreamSample(IAudioStreamSample *iface)
 {
@@ -346,6 +376,11 @@ static HRESULT WINAPI audio_IAMMediaStream_SetState(IAMMediaStream *iface, FILTE
     TRACE("(%p/%p)->(%u)\n", This, iface, state);
 
     EnterCriticalSection(&This->cs);
+
+    if (State_Stopped == state)
+        flush_event_queue(This);
+    if (State_Stopped == This->state)
+        This->eos = FALSE;
 
     This->state = state;
 
@@ -919,8 +954,34 @@ static HRESULT WINAPI audio_sink_QueryInternalConnections(IPin *iface, IPin **pi
 
 static HRESULT WINAPI audio_sink_EndOfStream(IPin *iface)
 {
-    FIXME("iface %p, stub!\n", iface);
-    return E_NOTIMPL;
+    struct audio_stream *stream = impl_from_IPin(iface);
+    struct queued_event *event;
+
+    TRACE("(%p/%p)->()\n", iface, stream);
+
+    EnterCriticalSection(&stream->cs);
+
+    if (stream->eos)
+    {
+        LeaveCriticalSection(&stream->cs);
+        return E_FAIL;
+    }
+
+    event = calloc(1, sizeof(*event));
+    if (!event)
+    {
+        LeaveCriticalSection(&stream->cs);
+        return E_OUTOFMEMORY;
+    }
+
+    event->type = QET_END_OF_STREAM;
+    list_add_tail(&stream->event_queue, &event->entry);
+
+    stream->eos = TRUE;
+
+    LeaveCriticalSection(&stream->cs);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI audio_sink_BeginFlush(IPin *iface)
@@ -1083,6 +1144,7 @@ HRESULT audio_stream_create(IMultiMediaStream *parent, const MSPID *purpose_id,
     object->parent = parent;
     object->purpose_id = *purpose_id;
     object->stream_type = stream_type;
+    list_init(&object->event_queue);
 
     *media_stream = &object->IAMMediaStream_iface;
 
