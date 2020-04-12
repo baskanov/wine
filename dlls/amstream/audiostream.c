@@ -29,13 +29,18 @@ static const WCHAR sink_id[] = L"I{A35FF56B-9FDA-11D0-8FDF-00C04FD9189D}";
 
 enum queued_event_type
 {
-    QET_END_OF_STREAM
+    QET_END_OF_STREAM,
+    QET_SAMPLE
 };
 
 struct queued_event
 {
     struct list entry;
     enum queued_event_type type;
+    IMediaSample *sample;
+    DWORD length;
+    BYTE *pointer;
+    DWORD position;
 };
 
 struct audio_stream
@@ -71,6 +76,8 @@ typedef struct {
 static void remove_queued_event(struct queued_event *event)
 {
     list_remove(&event->entry);
+    if (event->sample)
+        IMediaSample_Release(event->sample);
     HeapFree(GetProcessHeap(), 0, event);
 }
 
@@ -1090,8 +1097,45 @@ static HRESULT WINAPI audio_meminput_GetAllocatorRequirements(IMemInputPin *ifac
 
 static HRESULT WINAPI audio_meminput_Receive(IMemInputPin *iface, IMediaSample *sample)
 {
-    FIXME("iface %p, sample %p, stub!\n", iface, sample);
-    return E_NOTIMPL;
+    struct audio_stream *stream = impl_from_IMemInputPin(iface);
+    struct queued_event *event;
+    BYTE *pointer;
+    HRESULT hr;
+
+    TRACE("(%p)->(%p)\n", stream, sample);
+
+    EnterCriticalSection(&stream->cs);
+
+    if (stream->state == State_Stopped)
+    {
+        LeaveCriticalSection(&stream->cs);
+        return VFW_E_WRONG_STATE;
+    }
+
+    hr = IMediaSample_GetPointer(sample, &pointer);
+    if (FAILED(hr))
+    {
+        LeaveCriticalSection(&stream->cs);
+        return hr;
+    }
+
+    event = calloc(1, sizeof(*event));
+    if (!event)
+    {
+        LeaveCriticalSection(&stream->cs);
+        return E_OUTOFMEMORY;
+    }
+
+    event->type = QET_SAMPLE;
+    event->length = IMediaSample_GetActualDataLength(sample);
+    event->pointer = pointer;
+    event->sample = sample;
+    IMediaSample_AddRef(event->sample);
+    list_add_tail(&stream->event_queue, &event->entry);
+
+    LeaveCriticalSection(&stream->cs);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI audio_meminput_ReceiveMultiple(IMemInputPin *iface,
