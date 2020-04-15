@@ -64,6 +64,7 @@ struct audio_stream
     FILTER_STATE state;
     BOOL eos;
     struct list event_queue;
+    struct list update_queue;
 };
 
 typedef struct {
@@ -71,6 +72,13 @@ typedef struct {
     LONG ref;
     struct audio_stream *parent;
     IAudioData *audio_data;
+    HANDLE update_event;
+
+    struct list entry;
+    DWORD length;
+    BYTE *pointer;
+    DWORD position;
+    HRESULT update_hr;
 } IAudioStreamSampleImpl;
 
 static void remove_queued_event(struct queued_event *event)
@@ -81,6 +89,18 @@ static void remove_queued_event(struct queued_event *event)
     HeapFree(GetProcessHeap(), 0, event);
 }
 
+static void remove_queued_update(IAudioStreamSampleImpl *sample)
+{
+    HRESULT hr;
+
+    hr = IAudioData_SetActual(sample->audio_data, sample->position);
+    if (FAILED(hr))
+        sample->update_hr = hr;
+
+    list_remove(&sample->entry);
+    SetEvent(sample->update_event);
+}
+
 static void flush_event_queue(struct audio_stream *stream)
 {
     while (!list_empty(&stream->event_queue))
@@ -89,6 +109,41 @@ static void flush_event_queue(struct audio_stream *stream)
             LIST_ENTRY(list_head(&stream->event_queue), struct queued_event, entry);
 
         remove_queued_event(event);
+    }
+}
+
+static void process_update(IAudioStreamSampleImpl *sample, struct queued_event *event)
+{
+    DWORD advance;
+
+    if (event->type == QET_END_OF_STREAM)
+    {
+        sample->update_hr = sample->position ? S_OK : MS_S_ENDOFSTREAM;
+        return;
+    }
+
+    advance = min(event->length - event->position, sample->length - sample->position);
+    memcpy(&sample->pointer[sample->position], &event->pointer[event->position], advance);
+
+    event->position += advance;
+    sample->position += advance;
+
+    sample->update_hr = (sample->position == sample->length) ? S_OK : MS_S_PENDING;
+}
+
+static void process_updates(struct audio_stream *stream)
+{
+    while (!list_empty(&stream->update_queue) && !list_empty(&stream->event_queue))
+    {
+        IAudioStreamSampleImpl *sample = LIST_ENTRY(list_head(&stream->update_queue), IAudioStreamSampleImpl, entry);
+        struct queued_event *event = LIST_ENTRY(list_head(&stream->event_queue), struct queued_event, entry);
+
+        process_update(sample, event);
+
+        if (MS_S_PENDING != sample->update_hr)
+            remove_queued_update(sample);
+        if ((event->type != QET_END_OF_STREAM) && (event->position == event->length))
+            remove_queued_event(event);
     }
 }
 
@@ -136,7 +191,10 @@ static ULONG WINAPI IAudioStreamSampleImpl_Release(IAudioStreamSample *iface)
     TRACE("(%p)->(): new ref = %u\n", iface, ref);
 
     if (!ref)
+    {
+        CloseHandle(This->update_event);
         HeapFree(GetProcessHeap(), 0, This);
+    }
 
     return ref;
 }
@@ -166,11 +224,79 @@ static HRESULT WINAPI IAudioStreamSampleImpl_SetSampleTimes(IAudioStreamSample *
 }
 
 static HRESULT WINAPI IAudioStreamSampleImpl_Update(IAudioStreamSample *iface, DWORD flags, HANDLE event,
-                                                         PAPCFUNC func_APC, DWORD APC_data)
+        PAPCFUNC func_APC, DWORD APC_data)
 {
-    FIXME("(%p)->(%x,%p,%p,%u): stub\n", iface, flags, event, func_APC, APC_data);
+    IAudioStreamSampleImpl *sample = impl_from_IAudioStreamSample(iface);
+    DWORD length;
+    BYTE *pointer;
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%x,%p,%p,%u)\n", iface, flags, event, func_APC, APC_data);
+
+    hr = IAudioData_GetInfo(sample->audio_data, &length, &pointer, NULL);
+    if (FAILED(hr))
+        return hr;
+
+    if (event && func_APC)
+        return E_INVALIDARG;
+
+    if (func_APC)
+    {
+        FIXME("APC support is not implemented!\n");
+        return E_NOTIMPL;
+    }
+
+    if (event)
+    {
+        FIXME("Event parameter support is not implemented!\n");
+        return E_NOTIMPL;
+    }
+
+    if (flags & ~SSUPDATE_ASYNC)
+    {
+        FIXME("Unsupported flags: %x\n", flags);
+        return E_NOTIMPL;
+    }
+
+    EnterCriticalSection(&sample->parent->cs);
+
+    if (sample->parent->state == State_Stopped)
+    {
+        LeaveCriticalSection(&sample->parent->cs);
+        return MS_E_NOTRUNNING;
+    }
+    if (!sample->parent->peer)
+    {
+        LeaveCriticalSection(&sample->parent->cs);
+        return MS_S_ENDOFSTREAM;
+    }
+    if (MS_S_PENDING == sample->update_hr)
+    {
+        LeaveCriticalSection(&sample->parent->cs);
+        return MS_E_BUSY;
+    }
+
+    sample->length = length;
+    sample->pointer = pointer;
+    sample->position = 0;
+    sample->update_hr = MS_S_PENDING;
+    ResetEvent(sample->update_event);
+    list_add_tail(&sample->parent->update_queue, &sample->entry);
+
+    process_updates(sample->parent);
+
+    hr = sample->update_hr;
+    if (hr != MS_S_PENDING || (flags & SSUPDATE_ASYNC))
+    {
+        LeaveCriticalSection(&sample->parent->cs);
+        return hr;
+    }
+
+    LeaveCriticalSection(&sample->parent->cs);
+
+    WaitForSingleObject(sample->update_event, INFINITE);
+
+    return sample->update_hr;
 }
 
 static HRESULT WINAPI IAudioStreamSampleImpl_CompletionStatus(IAudioStreamSample *iface, DWORD flags, DWORD milliseconds)
@@ -218,6 +344,7 @@ static HRESULT audiostreamsample_create(struct audio_stream *parent, IAudioData 
     object->ref = 1;
     object->parent = parent;
     object->audio_data = audio_data;
+    object->update_event = CreateEventW(NULL, FALSE, FALSE, NULL);
 
     *audio_stream_sample = &object->IAudioStreamSample_iface;
 
@@ -986,6 +1113,8 @@ static HRESULT WINAPI audio_sink_EndOfStream(IPin *iface)
 
     stream->eos = TRUE;
 
+    process_updates(stream);
+
     LeaveCriticalSection(&stream->cs);
 
     return S_OK;
@@ -1133,6 +1262,8 @@ static HRESULT WINAPI audio_meminput_Receive(IMemInputPin *iface, IMediaSample *
     IMediaSample_AddRef(event->sample);
     list_add_tail(&stream->event_queue, &event->entry);
 
+    process_updates(stream);
+
     LeaveCriticalSection(&stream->cs);
 
     return S_OK;
@@ -1189,6 +1320,7 @@ HRESULT audio_stream_create(IMultiMediaStream *parent, const MSPID *purpose_id,
     object->purpose_id = *purpose_id;
     object->stream_type = stream_type;
     list_init(&object->event_queue);
+    list_init(&object->update_queue);
 
     *media_stream = &object->IAMMediaStream_iface;
 
