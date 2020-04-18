@@ -301,9 +301,24 @@ static HRESULT WINAPI IAudioStreamSampleImpl_Update(IAudioStreamSample *iface, D
 
 static HRESULT WINAPI IAudioStreamSampleImpl_CompletionStatus(IAudioStreamSample *iface, DWORD flags, DWORD milliseconds)
 {
-    FIXME("(%p)->(%x,%u): stub\n", iface, flags, milliseconds);
+    IAudioStreamSampleImpl *sample = impl_from_IAudioStreamSample(iface);
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("(%p)->(%x,%u)\n", iface, flags, milliseconds);
+
+    if (flags)
+    {
+        FIXME("Unsupported flags: %x\n", flags);
+        return E_NOTIMPL;
+    }
+
+    EnterCriticalSection(&sample->parent->cs);
+
+    hr = sample->update_hr;
+
+    LeaveCriticalSection(&sample->parent->cs);
+
+    return hr;
 }
 
 /*** IAudioStreamSample methods ***/
