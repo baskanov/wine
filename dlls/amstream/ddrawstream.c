@@ -940,7 +940,7 @@ static const IMemInputPinVtbl ddraw_meminput_vtbl =
     ddraw_meminput_ReceiveCanBlock,
 };
 
-HRESULT ddraw_stream_create(IMultiMediaStream *parent, const MSPID *purpose_id,
+HRESULT ddraw_stream_create_and_initialize(IMultiMediaStream *parent, const MSPID *purpose_id,
         IUnknown *stream_object, STREAM_TYPE stream_type, IAMMediaStream **media_stream)
 {
     struct ddraw_stream *object;

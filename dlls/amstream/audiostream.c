@@ -1292,7 +1292,7 @@ static const IMemInputPinVtbl audio_meminput_vtbl =
     audio_meminput_ReceiveCanBlock,
 };
 
-HRESULT audio_stream_create(IMultiMediaStream *parent, const MSPID *purpose_id,
+HRESULT audio_stream_create_and_initialize(IMultiMediaStream *parent, const MSPID *purpose_id,
         IUnknown *stream_object, STREAM_TYPE stream_type, IAMMediaStream **media_stream)
 {
     struct audio_stream *object;

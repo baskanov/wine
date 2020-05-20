@@ -377,9 +377,9 @@ static HRESULT WINAPI multimedia_stream_AddMediaStream(IAMMultiMediaStream *ifac
     }
 
     if (IsEqualGUID(PurposeId, &MSPID_PrimaryVideo))
-        hr = ddraw_stream_create((IMultiMediaStream*)iface, PurposeId, stream_object, This->type, &pStream);
+        hr = ddraw_stream_create_and_initialize((IMultiMediaStream*)iface, PurposeId, stream_object, This->type, &pStream);
     else if (IsEqualGUID(PurposeId, &MSPID_PrimaryAudio))
-        hr = audio_stream_create((IMultiMediaStream*)iface, PurposeId, stream_object, This->type, &pStream);
+        hr = audio_stream_create_and_initialize((IMultiMediaStream*)iface, PurposeId, stream_object, This->type, &pStream);
     else
         return MS_E_PURPOSEID;
 
