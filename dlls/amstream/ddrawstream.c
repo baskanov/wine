@@ -940,6 +940,28 @@ static const IMemInputPinVtbl ddraw_meminput_vtbl =
     ddraw_meminput_ReceiveCanBlock,
 };
 
+HRESULT ddraw_stream_create(IUnknown *outer, void **out)
+{
+    struct ddraw_stream *object;
+
+    object = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*object));
+    if (!object)
+        return E_OUTOFMEMORY;
+
+    object->IAMMediaStream_iface.lpVtbl = &ddraw_IAMMediaStream_vtbl;
+    object->IDirectDrawMediaStream_iface.lpVtbl = &ddraw_IDirectDrawMediaStream_Vtbl;
+    object->IMemInputPin_iface.lpVtbl = &ddraw_meminput_vtbl;
+    object->IPin_iface.lpVtbl = &ddraw_sink_vtbl;
+    object->ref = 1;
+
+    InitializeCriticalSection(&object->cs);
+
+    TRACE("Created ddraw stream %p.\n", object);
+    *out = &object->IAMMediaStream_iface;
+
+    return S_OK;
+}
+
 HRESULT ddraw_stream_create_and_initialize(IMultiMediaStream *parent, const MSPID *purpose_id,
         IUnknown *stream_object, STREAM_TYPE stream_type, IAMMediaStream **media_stream)
 {

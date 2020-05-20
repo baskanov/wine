@@ -1292,6 +1292,30 @@ static const IMemInputPinVtbl audio_meminput_vtbl =
     audio_meminput_ReceiveCanBlock,
 };
 
+HRESULT audio_stream_create(IUnknown *outer, void **out)
+{
+    struct audio_stream *object;
+
+    object = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*object));
+    if (!object)
+        return E_OUTOFMEMORY;
+
+    object->IAMMediaStream_iface.lpVtbl = &audio_IAMMediaStream_vtbl;
+    object->IAudioMediaStream_iface.lpVtbl = &audio_IAudioMediaStream_vtbl;
+    object->IMemInputPin_iface.lpVtbl = &audio_meminput_vtbl;
+    object->IPin_iface.lpVtbl = &audio_sink_vtbl;
+    object->ref = 1;
+
+    InitializeCriticalSection(&object->cs);
+    list_init(&object->receive_queue);
+    list_init(&object->update_queue);
+
+    TRACE("Created audio stream %p.\n", object);
+    *out = &object->IAMMediaStream_iface;
+
+    return S_OK;
+}
+
 HRESULT audio_stream_create_and_initialize(IMultiMediaStream *parent, const MSPID *purpose_id,
         IUnknown *stream_object, STREAM_TYPE stream_type, IAMMediaStream **media_stream)
 {
