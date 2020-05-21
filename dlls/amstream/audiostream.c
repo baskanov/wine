@@ -546,11 +546,13 @@ static HRESULT WINAPI audio_IAMMediaStream_SetState(IAMMediaStream *iface, FILTE
 static HRESULT WINAPI audio_IAMMediaStream_JoinAMMultiMediaStream(IAMMediaStream *iface,
         IAMMultiMediaStream *am_multi_media_stream)
 {
-    struct audio_stream *This = impl_from_IAMMediaStream(iface);
+    struct audio_stream *stream = impl_from_IAMMediaStream(iface);
 
-    FIXME("(%p/%p)->(%p) stub!\n", This, iface, am_multi_media_stream);
+    TRACE("stream %p, am_multi_media_stream %p.\n", stream, am_multi_media_stream);
 
-    return S_FALSE;
+    stream->parent = (IMultiMediaStream *)am_multi_media_stream;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI audio_IAMMediaStream_JoinFilter(IAMMediaStream *iface, IMediaStreamFilter *filter)

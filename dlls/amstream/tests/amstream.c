@@ -3600,6 +3600,51 @@ static void test_ddrawstream_initialize(void)
     ok(!ref, "Got outstanding refcount %d.\n", ref);
 }
 
+static void check_ammediastream_join_am_multi_media_stream(const CLSID *clsid)
+{
+    IAMMultiMediaStream *mmstream = create_ammultimediastream();
+    IMultiMediaStream *mmstream2;
+    IAMMediaStream *stream;
+    HRESULT hr;
+    ULONG mmstream_ref;
+    ULONG ref;
+
+    hr = CoCreateInstance(clsid, NULL, CLSCTX_INPROC_SERVER, &IID_IAMMediaStream, (void **)&stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    mmstream_ref = get_refcount(mmstream);
+
+    hr = IAMMediaStream_JoinAMMultiMediaStream(stream, mmstream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    ref = get_refcount(mmstream);
+    ok(ref == mmstream_ref, "Expected outstanding refcount %d, got %d.\n", mmstream_ref, ref);
+
+    hr = IAMMediaStream_GetMultiMediaStream(stream, &mmstream2);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(mmstream2 == (IMultiMediaStream *)mmstream, "Expected mmstream %p, got %p.\n", mmstream, mmstream2);
+
+    IMultiMediaStream_Release(mmstream2);
+
+    hr = IAMMediaStream_JoinAMMultiMediaStream(stream, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMediaStream_GetMultiMediaStream(stream, &mmstream2);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(mmstream2 == NULL, "Got mmstream %p.\n", mmstream2);
+
+    ref = IAMMediaStream_Release(stream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IAMMultiMediaStream_Release(mmstream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+}
+
+static void test_ammediastream_join_am_multi_media_stream(void)
+{
+    check_ammediastream_join_am_multi_media_stream(&CLSID_AMAudioStream);
+    check_ammediastream_join_am_multi_media_stream(&CLSID_AMDirectDrawStream);
+}
+
 void test_mediastreamfilter_get_state(void)
 {
     IAMMultiMediaStream *mmstream = create_ammultimediastream();
@@ -3780,6 +3825,8 @@ START_TEST(amstream)
     test_audiostreamsample_completion_status();
 
     test_ddrawstream_initialize();
+
+    test_ammediastream_join_am_multi_media_stream();
 
     test_mediastreamfilter_get_state();
     test_mediastreamfilter_stop_pause_run();
