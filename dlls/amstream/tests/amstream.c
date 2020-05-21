@@ -3545,6 +3545,61 @@ void test_audiostreamsample_completion_status(void)
     CloseHandle(event);
 }
 
+static void test_ddrawstream_initialize(void)
+{
+    IDirectDrawMediaStream *ddraw_stream;
+    IAMMediaStream *stream;
+    IDirectDraw *ddraw2;
+    IDirectDraw *ddraw;
+    STREAM_TYPE type;
+    MSPID mspid;
+    HRESULT hr;
+    ULONG ref;
+
+    hr = DirectDrawCreate(NULL, &ddraw, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = CoCreateInstance(&CLSID_AMDirectDrawStream, NULL, CLSCTX_INPROC_SERVER, &IID_IAMMediaStream, (void **)&stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMediaStream_QueryInterface(stream, &IID_IDirectDrawMediaStream, (void **)&ddraw_stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    /* Crashes on native. */
+    if (0)
+    {
+        hr = IAMMediaStream_Initialize(stream, NULL, 0, NULL, STREAMTYPE_WRITE);
+        ok(hr == E_POINTER, "Got hr %#x.\n", hr);
+    }
+
+    hr = IAMMediaStream_Initialize(stream, NULL, 0, &test_mspid, STREAMTYPE_WRITE);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMediaStream_GetInformation(stream, &mspid, &type);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(IsEqualGUID(&mspid, &test_mspid), "Got mspid %s.\n", wine_dbgstr_guid(&mspid));
+    ok(type == STREAMTYPE_WRITE, "Got type %u.\n", type);
+
+    hr = IAMMediaStream_Initialize(stream, (IUnknown *)ddraw, 0, &MSPID_PrimaryAudio, STREAMTYPE_READ);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMediaStream_GetInformation(stream, &mspid, &type);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(IsEqualGUID(&mspid, &MSPID_PrimaryAudio), "Got mspid %s.\n", wine_dbgstr_guid(&mspid));
+    ok(type == STREAMTYPE_READ, "Got type %u.\n", type);
+
+    hr = IDirectDrawMediaStream_GetDirectDraw(ddraw_stream, &ddraw2);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(ddraw2 == ddraw, "Expected ddraw %p, got %p.\n", ddraw, ddraw2);
+
+    IDirectDrawMediaStream_Release(ddraw_stream);
+    ref = IAMMediaStream_Release(stream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    IDirectDraw_Release(ddraw2);
+    ref = IDirectDraw_Release(ddraw);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+}
+
 void test_mediastreamfilter_get_state(void)
 {
     IAMMultiMediaStream *mmstream = create_ammultimediastream();
@@ -3723,6 +3778,8 @@ START_TEST(amstream)
 
     test_audiostreamsample_update();
     test_audiostreamsample_completion_status();
+
+    test_ddrawstream_initialize();
 
     test_mediastreamfilter_get_state();
     test_mediastreamfilter_stop_pause_run();
