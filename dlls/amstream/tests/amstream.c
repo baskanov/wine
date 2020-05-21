@@ -3046,6 +3046,44 @@ static void test_audiostream_receive(void)
     ok(!ref, "Got outstanding refcount %d.\n", ref);
 }
 
+static void test_audiostream_initialize(void)
+{
+    IAMMediaStream *stream;
+    STREAM_TYPE type;
+    MSPID mspid;
+    HRESULT hr;
+    ULONG ref;
+
+    hr = CoCreateInstance(&CLSID_AMAudioStream, NULL, CLSCTX_INPROC_SERVER, &IID_IAMMediaStream, (void **)&stream);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    /* Crashes on native. */
+    if (0)
+    {
+        hr = IAMMediaStream_Initialize(stream, NULL, 0, NULL, STREAMTYPE_WRITE);
+        ok(hr == E_POINTER, "Got hr %#x.\n", hr);
+    }
+
+    hr = IAMMediaStream_Initialize(stream, NULL, 0, &test_mspid, STREAMTYPE_WRITE);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMediaStream_GetInformation(stream, &mspid, &type);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(IsEqualGUID(&mspid, &test_mspid), "Got mspid %s.\n", wine_dbgstr_guid(&mspid));
+    ok(type == STREAMTYPE_WRITE, "Got type %u.\n", type);
+
+    hr = IAMMediaStream_Initialize(stream, NULL, 0, &MSPID_PrimaryAudio, STREAMTYPE_READ);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMediaStream_GetInformation(stream, &mspid, &type);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(IsEqualGUID(&mspid, &MSPID_PrimaryAudio), "Got mspid %s.\n", wine_dbgstr_guid(&mspid));
+    ok(type == STREAMTYPE_READ, "Got type %u.\n", type);
+
+    ref = IAMMediaStream_Release(stream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+}
+
 static void CALLBACK apc_func(ULONG_PTR param)
 {
 }
@@ -3681,6 +3719,7 @@ START_TEST(amstream)
     test_audiostream_set_state();
     test_audiostream_end_of_stream();
     test_audiostream_receive();
+    test_audiostream_initialize();
 
     test_audiostreamsample_update();
     test_audiostreamsample_completion_status();
