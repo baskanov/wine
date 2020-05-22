@@ -980,39 +980,6 @@ HRESULT ddraw_stream_create(IUnknown *outer, void **out)
     return S_OK;
 }
 
-HRESULT ddraw_stream_create_and_initialize(IMultiMediaStream *parent, const MSPID *purpose_id,
-        IUnknown *stream_object, STREAM_TYPE stream_type, IAMMediaStream **media_stream)
-{
-    struct ddraw_stream *object;
-    HRESULT hr;
-
-    TRACE("(%p,%s,%p,%p)\n", parent, debugstr_guid(purpose_id), stream_object, media_stream);
-
-    object = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*object));
-    if (!object)
-        return E_OUTOFMEMORY;
-
-    object->IAMMediaStream_iface.lpVtbl = &ddraw_IAMMediaStream_vtbl;
-    object->IDirectDrawMediaStream_iface.lpVtbl = &ddraw_IDirectDrawMediaStream_Vtbl;
-    object->IMemInputPin_iface.lpVtbl = &ddraw_meminput_vtbl;
-    object->IPin_iface.lpVtbl = &ddraw_sink_vtbl;
-    object->ref = 1;
-
-    InitializeCriticalSection(&object->cs);
-
-    object->parent = parent;
-    object->purpose_id = *purpose_id;
-    object->stream_type = stream_type;
-
-    if (stream_object
-            && FAILED(hr = IUnknown_QueryInterface(stream_object, &IID_IDirectDraw7, (void **)&object->ddraw)))
-        FIXME("Stream object doesn't implement IDirectDraw7 interface, hr %#x.\n", hr);
-
-    *media_stream = &object->IAMMediaStream_iface;
-
-    return S_OK;
-}
-
 typedef struct {
     IDirectDrawStreamSample IDirectDrawStreamSample_iface;
     LONG ref;

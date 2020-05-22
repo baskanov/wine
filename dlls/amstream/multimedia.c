@@ -301,6 +301,7 @@ static HRESULT WINAPI multimedia_stream_GetFilter(IAMMultiMediaStream *iface,
 static void add_stream(struct multimedia_stream *mmstream, IAMMediaStream *stream, IMediaStream **ret_stream)
 {
     IMediaStreamFilter_AddMediaStream(mmstream->filter, stream);
+    IAMMediaStream_JoinAMMultiMediaStream(stream, &mmstream->IAMMultiMediaStream_iface);
     if (ret_stream)
     {
         *ret_stream = (IMediaStream *)stream;
@@ -315,6 +316,7 @@ static HRESULT WINAPI multimedia_stream_AddMediaStream(IAMMultiMediaStream *ifac
     HRESULT hr;
     IAMMediaStream* pStream;
     IMediaStream *stream;
+    const CLSID *clsid;
 
     TRACE("mmstream %p, stream_object %p, id %s, flags %#x, ret_stream %p.\n",
             This, stream_object, debugstr_guid(PurposeId), dwFlags, ret_stream);
@@ -377,17 +379,25 @@ static HRESULT WINAPI multimedia_stream_AddMediaStream(IAMMultiMediaStream *ifac
     }
 
     if (IsEqualGUID(PurposeId, &MSPID_PrimaryVideo))
-        hr = ddraw_stream_create_and_initialize((IMultiMediaStream*)iface, PurposeId, stream_object, This->type, &pStream);
+        clsid = &CLSID_AMDirectDrawStream;
     else if (IsEqualGUID(PurposeId, &MSPID_PrimaryAudio))
-        hr = audio_stream_create_and_initialize((IMultiMediaStream*)iface, PurposeId, stream_object, This->type, &pStream);
+        clsid = &CLSID_AMAudioStream;
     else
         return MS_E_PURPOSEID;
 
-    if (SUCCEEDED(hr))
+    hr = CoCreateInstance(clsid, NULL, CLSCTX_INPROC_SERVER, &IID_IAMMediaStream, (void **)&pStream);
+    if (FAILED(hr))
+        return hr;
+    
+    hr = IAMMediaStream_Initialize(pStream, stream_object, dwFlags, PurposeId, This->type);
+    if (FAILED(hr))
     {
-        add_stream(This, pStream, ret_stream);
         IAMMediaStream_Release(pStream);
+        return hr;
     }
+
+    add_stream(This, pStream, ret_stream);
+    IAMMediaStream_Release(pStream);
 
     return hr;
 }
