@@ -441,7 +441,8 @@ static HRESULT WINAPI audio_IAMMediaStream_GetMultiMediaStream(IAMMediaStream *i
     if (!multi_media_stream)
         return E_POINTER;
 
-    IMultiMediaStream_AddRef(This->parent);
+    if (This->parent)
+        IMultiMediaStream_AddRef(This->parent);
     *multi_media_stream = This->parent;
 
     return S_OK;
