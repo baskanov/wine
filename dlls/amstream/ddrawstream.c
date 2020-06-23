@@ -53,6 +53,44 @@ struct ddraw_stream
 static HRESULT ddrawstreamsample_create(struct ddraw_stream *parent, IDirectDrawSurface *surface,
     const RECT *rect, IDirectDrawStreamSample **ddraw_stream_sample);
 
+static BOOL is_media_type_compatible(const AM_MEDIA_TYPE *media_type, const DDSURFACEDESC *format)
+{
+    const VIDEOINFOHEADER *video_info = (const VIDEOINFOHEADER *)media_type->pbFormat;
+
+    if ((format->dwFlags & DDSD_WIDTH) && video_info->bmiHeader.biWidth != format->dwWidth)
+        return FALSE;
+
+    if ((format->dwFlags & DDSD_HEIGHT) && abs(video_info->bmiHeader.biHeight) != format->dwHeight)
+        return FALSE;
+
+    if (format->dwFlags & DDSD_PIXELFORMAT)
+    {
+        const GUID *subtype = &GUID_NULL;
+        switch (format->ddpfPixelFormat.u1.dwRGBBitCount)
+        {
+        case 8:
+            subtype = &MEDIASUBTYPE_RGB8;
+            break;
+        case 16:
+            if (format->ddpfPixelFormat.u3.dwGBitMask == 0x7e0)
+                subtype = &MEDIASUBTYPE_RGB565;
+            else
+                subtype = &MEDIASUBTYPE_RGB555;
+            break;
+        case 24:
+            subtype = &MEDIASUBTYPE_RGB24;
+            break;
+        case 32:
+            subtype = &MEDIASUBTYPE_RGB32;
+            break;
+        }
+        if (!IsEqualGUID(&media_type->subtype, subtype))
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
 static inline struct ddraw_stream *impl_from_IAMMediaStream(IAMMediaStream *iface)
 {
     return CONTAINING_RECORD(iface, struct ddraw_stream, IAMMediaStream_iface);
@@ -749,7 +787,8 @@ static HRESULT WINAPI ddraw_sink_ReceiveConnection(IPin *iface, IPin *peer, cons
                 && !IsEqualGUID(&mt->subtype, &MEDIASUBTYPE_RGB32)
                 && !IsEqualGUID(&mt->subtype, &MEDIASUBTYPE_RGB555)
                 && !IsEqualGUID(&mt->subtype, &MEDIASUBTYPE_RGB565))
-            || !IsEqualGUID(&mt->formattype, &FORMAT_VideoInfo))
+            || !IsEqualGUID(&mt->formattype, &FORMAT_VideoInfo)
+            || !is_media_type_compatible(mt, &stream->format))
     {
         LeaveCriticalSection(&stream->cs);
         return VFW_E_TYPE_NOT_ACCEPTED;
