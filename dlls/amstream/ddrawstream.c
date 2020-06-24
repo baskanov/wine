@@ -1726,14 +1726,31 @@ static HRESULT ddrawstreamsample_create(struct ddraw_stream *parent, IDirectDraw
         }
     }
 
-    if (rect)
-        object->rect = *rect;
-    else if (object->surface)
     {
-        DDSURFACEDESC desc = { sizeof(desc) };
+        DDSURFACEDESC desc = { sizeof(DDSURFACEDESC) };
         hr = IDirectDrawSurface_GetSurfaceDesc(object->surface, &desc);
-        if (hr == S_OK)
+        if (FAILED(hr))
+        {
+            IDirectDrawStreamSample_Release(&object->IDirectDrawStreamSample_iface);
+            return hr;
+        }
+        if (rect)
+        {
+            object->rect = *rect;
+            desc.dwWidth = rect->right - rect->left;
+            desc.dwHeight = rect->bottom - rect->top;
+            desc.dwFlags |= DDSD_WIDTH | DDSD_HEIGHT;
+        }
+        else
+        {
             SetRect(&object->rect, 0, 0, desc.dwWidth, desc.dwHeight);
+        }
+        hr = IDirectDrawMediaStream_SetFormat(&parent->IDirectDrawMediaStream_iface, &desc, NULL);
+        if (FAILED(hr))
+        {
+            IDirectDrawStreamSample_Release(&object->IDirectDrawStreamSample_iface);
+            return hr;
+        }
     }
 
     *ddraw_stream_sample = &object->IDirectDrawStreamSample_iface;
