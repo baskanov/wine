@@ -1509,9 +1509,40 @@ static HRESULT WINAPI ddraw_sample_Update(IDirectDrawStreamSample *iface,
 
 static HRESULT WINAPI ddraw_sample_CompletionStatus(IDirectDrawStreamSample *iface, DWORD flags, DWORD milliseconds)
 {
-    FIXME("(%p)->(%x,%u): stub\n", iface, flags, milliseconds);
+    struct ddraw_sample *sample = impl_from_IDirectDrawStreamSample(iface);
+    DWORD unhandled_flags = flags & ~(COMPSTAT_WAIT | COMPSTAT_ABORT);
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("sample %p, flags %#x, milliseconds %u.\n", sample, flags, milliseconds);
+
+    if (unhandled_flags)
+    {
+        FIXME("Unhandled flags %#x.\n", unhandled_flags);
+        return E_NOTIMPL;
+    }
+
+    EnterCriticalSection(&sample->parent->cs);
+
+    if (sample->update_hr == MS_S_PENDING)
+    {
+        if (flags & COMPSTAT_ABORT)
+        {
+            sample->update_hr = E_ABORT;
+            remove_queued_update(sample);
+        }
+        else if (flags & COMPSTAT_WAIT)
+        {
+            LeaveCriticalSection(&sample->parent->cs);
+            WaitForSingleObject(sample->update_event, milliseconds);
+            EnterCriticalSection(&sample->parent->cs);
+        }
+    }
+
+    hr = sample->update_hr;
+
+    LeaveCriticalSection(&sample->parent->cs);
+
+    return hr;
 }
 
 /*** IDirectDrawStreamSample methods ***/
@@ -1574,7 +1605,7 @@ static HRESULT ddrawstreamsample_create(struct ddraw_stream *parent, IDirectDraw
     object->IDirectDrawStreamSample_iface.lpVtbl = &DirectDrawStreamSample_Vtbl;
     object->ref = 1;
     object->parent = parent;
-    object->update_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    object->update_event = CreateEventW(NULL, TRUE, TRUE, NULL);
     IAMMediaStream_AddRef(&parent->IAMMediaStream_iface);
     ++parent->sample_refs;
 
