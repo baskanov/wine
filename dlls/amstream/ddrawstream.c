@@ -60,6 +60,7 @@ struct ddraw_stream
     AM_MEDIA_TYPE mt;
     DDSURFACEDESC format;
     FILTER_STATE state;
+    REFERENCE_TIME segment_start;
     BOOL eos;
     BOOL flushing;
     struct list receive_queue;
@@ -1102,9 +1103,18 @@ static HRESULT WINAPI ddraw_sink_EndFlush(IPin *iface)
 
 static HRESULT WINAPI ddraw_sink_NewSegment(IPin *iface, REFERENCE_TIME start, REFERENCE_TIME stop, double rate)
 {
-    FIXME("iface %p, start %s, stop %s, rate %0.16e, stub!\n",
-            iface, wine_dbgstr_longlong(start), wine_dbgstr_longlong(stop), rate);
-    return E_NOTIMPL;
+    struct ddraw_stream *stream = impl_from_IPin(iface);
+
+    TRACE("stream %p, start %s, stop %s, rate %0.16e\n",
+            stream, wine_dbgstr_longlong(start), wine_dbgstr_longlong(stop), rate);
+
+    EnterCriticalSection(&stream->cs);
+
+    stream->segment_start = start;
+
+    LeaveCriticalSection(&stream->cs);
+
+    return S_OK;
 }
 
 static const IPinVtbl ddraw_sink_vtbl =
@@ -1239,8 +1249,8 @@ static HRESULT WINAPI ddraw_meminput_Receive(IMemInputPin *iface, IMediaSample *
     receive->stride = (bitmap_info->biHeight > 0) ? -stride : stride;
     receive->pointer = (bitmap_info->biHeight > 0) ? pointer + stride * (bitmap_info->biHeight - 1) : pointer;
     receive->sample = sample;
-    receive->start_time = start_time;
-    receive->end_time = end_time;
+    receive->start_time = start_time + stream->segment_start;
+    receive->end_time = end_time + stream->segment_start;
     IMediaSample_AddRef(receive->sample);
     list_add_tail(&stream->receive_queue, &receive->entry);
 
