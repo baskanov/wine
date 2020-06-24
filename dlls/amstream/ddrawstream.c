@@ -28,6 +28,14 @@ WINE_DEFAULT_DEBUG_CHANNEL(amstream);
 
 static const WCHAR sink_id[] = L"I{A35FF56A-9FDA-11D0-8FDF-00C04FD9189D}";
 
+struct queued_receive
+{
+    struct list entry;
+    IMediaSample *sample;
+    int stride;
+    BYTE *pointer;
+};
+
 struct ddraw_stream
 {
     IAMMediaStream IAMMediaStream_iface;
@@ -51,10 +59,26 @@ struct ddraw_stream
     DDSURFACEDESC format;
     FILTER_STATE state;
     BOOL eos;
+    struct list receive_queue;
 };
 
 static HRESULT ddrawstreamsample_create(struct ddraw_stream *parent, IDirectDrawSurface *surface,
     const RECT *rect, IDirectDrawStreamSample **ddraw_stream_sample);
+
+static void remove_queued_receive(struct queued_receive *receive)
+{
+    list_remove(&receive->entry);
+    IMediaSample_Release(receive->sample);
+    free(receive);
+}
+
+static void flush_receive_queue(struct ddraw_stream *stream)
+{
+    struct list *entry;
+
+    while ((entry = list_head(&stream->receive_queue)))
+        remove_queued_receive(LIST_ENTRY(entry, struct queued_receive, entry));
+}
 
 static BOOL is_media_type_compatible(const AM_MEDIA_TYPE *media_type, const DDSURFACEDESC *format)
 {
@@ -278,6 +302,8 @@ static HRESULT WINAPI ddraw_IAMMediaStream_SetState(IAMMediaStream *iface, FILTE
 
     EnterCriticalSection(&stream->cs);
 
+    if (state == State_Stopped)
+        flush_receive_queue(stream);
     if (stream->state == State_Stopped)
         stream->eos = FALSE;
 
@@ -1140,8 +1166,48 @@ static HRESULT WINAPI ddraw_meminput_GetAllocatorRequirements(IMemInputPin *ifac
 
 static HRESULT WINAPI ddraw_meminput_Receive(IMemInputPin *iface, IMediaSample *sample)
 {
-    FIXME("iface %p, sample %p, stub!\n", iface, sample);
-    return E_NOTIMPL;
+    struct ddraw_stream *stream = impl_from_IMemInputPin(iface);
+    struct queued_receive *receive;
+    BITMAPINFOHEADER *bitmap_info = &((VIDEOINFOHEADER *)stream->mt.pbFormat)->bmiHeader;
+    BYTE *pointer;
+    int stride;
+    HRESULT hr;
+
+    TRACE("stream %p, sample %p.\n", stream, sample);
+
+    EnterCriticalSection(&stream->cs);
+
+    if (stream->state == State_Stopped)
+    {
+        LeaveCriticalSection(&stream->cs);
+        return VFW_E_WRONG_STATE;
+    }
+
+    hr = IMediaSample_GetPointer(sample, &pointer);
+    if (FAILED(hr))
+    {
+        LeaveCriticalSection(&stream->cs);
+        return hr;
+    }
+
+    receive = calloc(1, sizeof(*receive));
+    if (!receive)
+    {
+        LeaveCriticalSection(&stream->cs);
+        return E_OUTOFMEMORY;
+    }
+
+    stride = ((bitmap_info->biWidth * bitmap_info->biBitCount + 31) & ~31) >> 3;
+
+    receive->stride = (bitmap_info->biHeight > 0) ? -stride : stride;
+    receive->pointer = (bitmap_info->biHeight > 0) ? pointer + stride * (bitmap_info->biHeight - 1) : pointer;
+    receive->sample = sample;
+    IMediaSample_AddRef(receive->sample);
+    list_add_tail(&stream->receive_queue, &receive->entry);
+
+    LeaveCriticalSection(&stream->cs);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI ddraw_meminput_ReceiveMultiple(IMemInputPin *iface,
@@ -1188,6 +1254,7 @@ HRESULT ddraw_stream_create(IUnknown *outer, void **out)
     object->ref = 1;
 
     InitializeCriticalSection(&object->cs);
+    list_init(&object->receive_queue);
 
     TRACE("Created ddraw stream %p.\n", object);
 
