@@ -59,6 +59,7 @@ struct ddraw_stream
     struct format format;
     FILTER_STATE state;
     BOOL eos;
+    HANDLE update_queued_event;
 };
 
 static HRESULT ddrawstreamsample_create(struct ddraw_stream *parent, IDirectDrawSurface *surface,
@@ -150,6 +151,7 @@ static ULONG WINAPI ddraw_IAMMediaStream_Release(IAMMediaStream *iface)
         DeleteCriticalSection(&stream->cs);
         if (stream->ddraw)
             IDirectDraw_Release(stream->ddraw);
+        CloseHandle(stream->update_queued_event);
         HeapFree(GetProcessHeap(), 0, stream);
     }
 
@@ -268,6 +270,8 @@ static HRESULT WINAPI ddraw_IAMMediaStream_SetState(IAMMediaStream *iface, FILTE
 
     EnterCriticalSection(&stream->cs);
 
+    if (state == State_Stopped)
+        SetEvent(stream->update_queued_event);
     if (stream->state == State_Stopped)
         stream->eos = FALSE;
 
@@ -1190,8 +1194,24 @@ static HRESULT WINAPI ddraw_meminput_GetAllocatorRequirements(IMemInputPin *ifac
 
 static HRESULT WINAPI ddraw_meminput_Receive(IMemInputPin *iface, IMediaSample *sample)
 {
-    FIXME("iface %p, sample %p, stub!\n", iface, sample);
-    return E_NOTIMPL;
+    struct ddraw_stream *stream = impl_from_IMemInputPin(iface);
+
+    TRACE("stream %p, sample %p.\n", stream, sample);
+
+    EnterCriticalSection(&stream->cs);
+
+    for (;;)
+    {
+        if (stream->state == State_Stopped)
+        {
+            LeaveCriticalSection(&stream->cs);
+            return S_OK;
+        }
+
+        LeaveCriticalSection(&stream->cs);
+        WaitForSingleObject(stream->update_queued_event, INFINITE);
+        EnterCriticalSection(&stream->cs);
+    }
 }
 
 static HRESULT WINAPI ddraw_meminput_ReceiveMultiple(IMemInputPin *iface,
@@ -1236,6 +1256,7 @@ HRESULT ddraw_stream_create(IUnknown *outer, void **out)
     object->IMemInputPin_iface.lpVtbl = &ddraw_meminput_vtbl;
     object->IPin_iface.lpVtbl = &ddraw_sink_vtbl;
     object->ref = 1;
+    object->update_queued_event = CreateEventW(NULL, FALSE, FALSE, NULL);
 
     object->format.width = 100;
     object->format.height = 100;
