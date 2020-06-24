@@ -34,6 +34,8 @@ struct queued_receive
     IMediaSample *sample;
     int stride;
     BYTE *pointer;
+    STREAM_TIME start_time;
+    STREAM_TIME end_time;
 };
 
 struct ddraw_stream
@@ -1195,6 +1197,8 @@ static HRESULT WINAPI ddraw_meminput_Receive(IMemInputPin *iface, IMediaSample *
     struct ddraw_stream *stream = impl_from_IMemInputPin(iface);
     struct queued_receive *receive;
     BITMAPINFOHEADER *bitmap_info = &((VIDEOINFOHEADER *)stream->mt.pbFormat)->bmiHeader;
+    REFERENCE_TIME start_time = 0;
+    REFERENCE_TIME end_time = 0;
     BYTE *pointer;
     int stride;
     HRESULT hr;
@@ -1221,6 +1225,8 @@ static HRESULT WINAPI ddraw_meminput_Receive(IMemInputPin *iface, IMediaSample *
         return hr;
     }
 
+    IMediaSample_GetTime(sample, &start_time, &end_time);
+
     receive = calloc(1, sizeof(*receive));
     if (!receive)
     {
@@ -1233,6 +1239,8 @@ static HRESULT WINAPI ddraw_meminput_Receive(IMemInputPin *iface, IMediaSample *
     receive->stride = (bitmap_info->biHeight > 0) ? -stride : stride;
     receive->pointer = (bitmap_info->biHeight > 0) ? pointer + stride * (bitmap_info->biHeight - 1) : pointer;
     receive->sample = sample;
+    receive->start_time = start_time;
+    receive->end_time = end_time;
     IMediaSample_AddRef(receive->sample);
     list_add_tail(&stream->receive_queue, &receive->entry);
 
@@ -1304,6 +1312,8 @@ struct ddraw_sample
     struct ddraw_stream *parent;
     IDirectDrawSurface *surface;
     RECT rect;
+    STREAM_TIME start_time;
+    STREAM_TIME end_time;
     HANDLE update_event;
 
     struct list entry;
@@ -1337,6 +1347,9 @@ static void process_update(struct ddraw_sample *sample, struct queued_receive *r
         src_row += receive->stride;
         dst_row += sample->stride;
     }
+
+    sample->start_time = receive->start_time;
+    sample->end_time = receive->end_time;
 
     sample->update_hr = S_OK;
 }
@@ -1444,9 +1457,19 @@ static HRESULT WINAPI ddraw_sample_GetMediaStream(IDirectDrawStreamSample *iface
 static HRESULT WINAPI ddraw_sample_GetSampleTimes(IDirectDrawStreamSample *iface, STREAM_TIME *start_time,
                                                                  STREAM_TIME *end_time, STREAM_TIME *current_time)
 {
-    FIXME("(%p)->(%p,%p,%p): stub\n", iface, start_time, end_time, current_time);
+    struct ddraw_sample *sample = impl_from_IDirectDrawStreamSample(iface);
 
-    return E_NOTIMPL;
+    TRACE("sample %p, start_time %p, end_time %p, current_time %p.\n", sample, start_time, end_time, current_time);
+
+    if (current_time)
+        IMediaStreamFilter_GetCurrentStreamTime(sample->parent->filter, current_time);
+
+    if (start_time)
+        *start_time = sample->start_time;
+    if (end_time)
+        *end_time = sample->end_time;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI ddraw_sample_SetSampleTimes(IDirectDrawStreamSample *iface, const STREAM_TIME *start_time,
