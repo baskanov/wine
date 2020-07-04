@@ -53,6 +53,48 @@ static const AM_MEDIA_TYPE audio_mt =
 static const WCHAR primary_video_sink_id[] = L"I{A35FF56A-9FDA-11D0-8FDF-00C04FD9189D}";
 static const WCHAR primary_audio_sink_id[] = L"I{A35FF56B-9FDA-11D0-8FDF-00C04FD9189D}";
 
+static const WCHAR *load_resource(const WCHAR *name)
+{
+    HMODULE module = GetModuleHandleA(NULL);
+    HRSRC resource;
+    DWORD written;
+    HGLOBAL data;
+    HANDLE file;
+    WCHAR *path;
+    DWORD size;
+    void *ptr;
+
+    path = calloc(MAX_PATH + 1, sizeof(WCHAR));
+    ok(!!path, "Failed to allocate temp path string.\n");
+    GetTempPathW(MAX_PATH + 1, path);
+    wcscat(path, name);
+
+    file = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, 0);
+    ok(file != INVALID_HANDLE_VALUE, "Failed to create file %s, error %u.\n", wine_dbgstr_w(path), GetLastError());
+
+    resource = FindResourceW(module, name, (const WCHAR *)RT_RCDATA);
+    ok(!!resource, "Failed to find resource %s, error %u.\n", wine_dbgstr_w(name), GetLastError());
+
+    data = LoadResource(module, resource);
+    size = SizeofResource(module, resource);
+
+    ptr = LockResource(data);
+
+    WriteFile(file, ptr, size, &written, NULL);
+    ok(written == size, "Failed to write file %s.\n", wine_dbgstr_w(path));
+
+    CloseHandle(file);
+
+    return path;
+}
+
+static void unload_resource(const WCHAR *path)
+{
+    BOOL ret = DeleteFileW(path);
+    ok(ret, "Failed to delete file %s.\n", wine_dbgstr_w(path));
+    free((void *)path);
+}
+
 #define EXPECT_REF(obj,ref) _expect_ref((IUnknown*)obj, ref, __LINE__)
 static void _expect_ref(IUnknown* obj, ULONG ref, int line)
 {
@@ -229,7 +271,7 @@ static void test_interfaces(void)
     ok(!ref, "Got outstanding refcount %u.\n", ref);
 }
 
-static void test_openfile(void)
+static void test_openfile(const WCHAR *test_avi_path)
 {
     IMediaStreamFilter *filter;
     IAMMultiMediaStream *pams;
@@ -247,7 +289,7 @@ static void test_openfile(void)
     if (pgraph)
         IGraphBuilder_Release(pgraph);
 
-    hr = IAMMultiMediaStream_OpenFile(pams, L"test.avi", AMMSF_NORENDER);
+    hr = IAMMultiMediaStream_OpenFile(pams, test_avi_path, AMMSF_NORENDER);
     ok(hr==S_OK, "IAMMultiMediaStream_OpenFile returned: %x\n", hr);
 
     hr = IAMMultiMediaStream_GetFilterGraph(pams, &pgraph);
@@ -267,7 +309,7 @@ static void test_openfile(void)
 
     check_interface(filter, &IID_IMediaSeeking, FALSE);
 
-    hr = IAMMultiMediaStream_OpenFile(pams, L"test.avi", 0);
+    hr = IAMMultiMediaStream_OpenFile(pams, test_avi_path, 0);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
     check_interface(filter, &IID_IMediaSeeking, TRUE);
@@ -278,7 +320,7 @@ static void test_openfile(void)
     ok(!ref, "Got outstanding refcount %d.\n", ref);
 }
 
-static void test_renderfile(void)
+static void test_renderfile(const WCHAR *test_avi_path)
 {
     IAMMultiMediaStream *pams;
     HRESULT hr;
@@ -305,7 +347,7 @@ static void test_renderfile(void)
     hr = IAMMultiMediaStream_AddMediaStream(pams, NULL, &MSPID_PrimaryAudio, AMMSF_ADDDEFAULTRENDERER, NULL);
     ok(hr==S_OK || hr==VFW_E_NO_AUDIO_HARDWARE, "IAMMultiMediaStream_AddMediaStream returned: %x\n", hr);
 
-    hr = IAMMultiMediaStream_OpenFile(pams, L"test.avi", 0);
+    hr = IAMMultiMediaStream_OpenFile(pams, test_avi_path, 0);
     ok(hr==S_OK, "IAMMultiMediaStream_OpenFile returned: %x\n", hr);
 
     hr = IAMMultiMediaStream_GetMediaStream(pams, &MSPID_PrimaryVideo, &pvidstream);
@@ -5073,7 +5115,7 @@ static void test_ddrawstream_getsetdirectdraw(void)
 
 START_TEST(amstream)
 {
-    HANDLE file;
+    const WCHAR *test_avi_path;
 
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
 
@@ -5088,14 +5130,12 @@ START_TEST(amstream)
     test_media_types();
     test_IDirectDrawStreamSample();
 
-    file = CreateFileW(L"test.avi", 0, 0, NULL, OPEN_EXISTING, 0, NULL);
-    if (file != INVALID_HANDLE_VALUE)
-    {
-        CloseHandle(file);
+    test_avi_path = load_resource(L"test.avi");
 
-        test_openfile();
-        test_renderfile();
-    }
+    test_openfile(test_avi_path);
+    test_renderfile(test_avi_path);
+
+    unload_resource(test_avi_path);
 
     test_audiodata_query_interface();
     test_audiodata_get_info();
