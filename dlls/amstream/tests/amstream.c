@@ -231,8 +231,10 @@ static void test_interfaces(void)
 
 static void test_openfile(void)
 {
+    IMediaStreamFilter *filter;
     IAMMultiMediaStream *pams;
     HRESULT hr;
+    LONG ref;
     IGraphBuilder* pgraph;
 
     if (!(pams = create_ammultimediastream()))
@@ -245,12 +247,8 @@ static void test_openfile(void)
     if (pgraph)
         IGraphBuilder_Release(pgraph);
 
-    check_interface(pams, &IID_IMediaSeeking, FALSE);
-
-    hr = IAMMultiMediaStream_OpenFile(pams, L"test.avi", 0);
+    hr = IAMMultiMediaStream_OpenFile(pams, L"test.avi", AMMSF_NORENDER);
     ok(hr==S_OK, "IAMMultiMediaStream_OpenFile returned: %x\n", hr);
-
-    check_interface(pams, &IID_IMediaSeeking, TRUE);
 
     hr = IAMMultiMediaStream_GetFilterGraph(pams, &pgraph);
     ok(hr==S_OK, "IAMMultiMediaStream_GetFilterGraph returned: %x\n", hr);
@@ -260,6 +258,24 @@ static void test_openfile(void)
         IGraphBuilder_Release(pgraph);
 
     IAMMultiMediaStream_Release(pams);
+
+    pams = create_ammultimediastream();
+    hr = IAMMultiMediaStream_AddMediaStream(pams, NULL, &MSPID_PrimaryAudio, 0, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IAMMultiMediaStream_GetFilter(pams, &filter);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    check_interface(filter, &IID_IMediaSeeking, FALSE);
+
+    hr = IAMMultiMediaStream_OpenFile(pams, L"test.avi", 0);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    check_interface(filter, &IID_IMediaSeeking, TRUE);
+
+    ref = IAMMultiMediaStream_Release(pams);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IMediaStreamFilter_Release(filter);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
 }
 
 static void test_renderfile(void)
