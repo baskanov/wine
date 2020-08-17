@@ -971,6 +971,7 @@ struct testfilter
     IMediaSeeking IMediaSeeking_iface;
     LONGLONG current_position;
     LONGLONG stop_position;
+    const AM_MEDIA_TYPE *preferred_mt;
     HRESULT get_duration_hr;
     HRESULT get_stop_position_hr;
     HRESULT set_positions_hr;
@@ -1031,6 +1032,16 @@ static inline struct testfilter *impl_from_base_pin(struct strmbase_pin *iface)
     return CONTAINING_RECORD(iface, struct testfilter, source.pin);
 }
 
+static HRESULT testsource_get_media_type(struct strmbase_pin *iface, unsigned int index, AM_MEDIA_TYPE *mt)
+{
+    struct testfilter *filter = impl_from_base_pin(iface);
+
+    if (index < 1 && filter->preferred_mt)
+        return CopyMediaType(mt, filter->preferred_mt);
+
+    return VFW_S_NO_MORE_ITEMS;
+}
+
 static HRESULT testsource_query_interface(struct strmbase_pin *iface, REFIID iid, void **out)
 {
     struct testfilter *filter = impl_from_base_pin(iface);
@@ -1043,6 +1054,21 @@ static HRESULT testsource_query_interface(struct strmbase_pin *iface, REFIID iid
     IUnknown_AddRef((IUnknown *)*out);
 
     return S_OK;
+}
+
+static HRESULT WINAPI testsource_DecideAllocator(struct strmbase_source *iface, IMemInputPin *pin, IMemAllocator **alloc)
+{
+    ALLOCATOR_PROPERTIES props = {0};
+    HRESULT hr;
+
+    hr = BaseOutputPinImpl_InitAllocator(iface, alloc);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    IMemInputPin_GetAllocatorRequirements(pin, &props);
+    hr = iface->pFuncsTable->pfnDecideBufferSize(iface, *alloc, &props);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    return IMemInputPin_NotifyAllocator(pin, *alloc, FALSE);
 }
 
 static HRESULT WINAPI testsource_DecideBufferSize(struct strmbase_source *iface,
@@ -1064,10 +1090,11 @@ static HRESULT WINAPI testsource_DecideBufferSize(struct strmbase_source *iface,
 
 static const struct strmbase_source_ops testsource_ops =
 {
+    .base.pin_get_media_type = testsource_get_media_type,
     .base.pin_query_interface = testsource_query_interface,
     .pfnAttemptConnection = BaseOutputPinImpl_AttemptConnection,
     .pfnDecideBufferSize = testsource_DecideBufferSize,
-    .pfnDecideAllocator = BaseOutputPinImpl_DecideAllocator,
+    .pfnDecideAllocator = testsource_DecideAllocator,
 };
 
 static void testfilter_init(struct testfilter *filter)
@@ -5127,6 +5154,34 @@ static void test_ddrawstream_set_format(void)
     }
 
     hr = IDirectDrawMediaStream_SetFormat(ddraw_stream, &empty_format, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IGraphBuilder_ConnectDirect(graph, &source.source.pin.IPin_iface, pin, &rgb8_mt);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    source.preferred_mt = NULL;
+
+    hr = IDirectDrawMediaStream_SetFormat(ddraw_stream, &rgb8_format, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IDirectDrawMediaStream_SetFormat(ddraw_stream, &rgb555_format, NULL);
+    ok(hr == DDERR_INVALIDSURFACETYPE, "Got hr %#x.\n", hr);
+    ok(IsEqualGUID(&source.source.pin.mt.subtype, &MEDIASUBTYPE_RGB8),
+            "Got subtype %s.\n", wine_dbgstr_guid(&source.source.pin.mt.subtype));
+
+    source.preferred_mt = &rgb555_mt;
+
+    hr = IDirectDrawMediaStream_SetFormat(ddraw_stream, &rgb8_format, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IDirectDrawMediaStream_SetFormat(ddraw_stream, &rgb555_format, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(IsEqualGUID(&source.source.pin.mt.subtype, &MEDIASUBTYPE_RGB555),
+            "Got subtype %s.\n", wine_dbgstr_guid(&source.source.pin.mt.subtype));
+
+    hr = IGraphBuilder_Disconnect(graph, &source.source.pin.IPin_iface);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IGraphBuilder_Disconnect(graph, pin);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
     ref = IAMMultiMediaStream_Release(mmstream);

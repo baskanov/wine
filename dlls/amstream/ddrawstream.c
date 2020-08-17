@@ -43,6 +43,7 @@ struct ddraw_stream
     IDirectDraw *ddraw;
     CRITICAL_SECTION cs;
     IMediaStreamFilter *filter;
+    IFilterGraph *graph;
 
     IPin *peer;
     IMemAllocator *allocator;
@@ -304,6 +305,8 @@ static HRESULT WINAPI ddraw_IAMMediaStream_JoinFilterGraph(IAMMediaStream *iface
 
     TRACE("stream %p, filtergraph %p.\n", stream, filtergraph);
 
+    stream->graph = filtergraph;
+
     return S_OK;
 }
 
@@ -449,6 +452,11 @@ static HRESULT WINAPI ddraw_IDirectDrawMediaStream_SetFormat(IDirectDrawMediaStr
         const DDSURFACEDESC *format, IDirectDrawPalette *palette)
 {
     struct ddraw_stream *stream = impl_from_IDirectDrawMediaStream(iface);
+    IGraphBuilder *graph_builder;
+    AM_MEDIA_TYPE old_media_type;
+    DDSURFACEDESC old_format;
+    IPin *old_peer;
+    HRESULT hr;
 
     TRACE("stream %p, format %p, palette %p.\n", stream, format, palette);
 
@@ -502,7 +510,47 @@ static HRESULT WINAPI ddraw_IDirectDrawMediaStream_SetFormat(IDirectDrawMediaStr
 
     EnterCriticalSection(&stream->cs);
 
+    old_format = stream->format;
     stream->format = *format;
+
+    if (stream->peer && !is_media_type_compatible(&stream->mt, &stream->format))
+    {
+        hr = IFilterGraph_QueryInterface(stream->graph, &IID_IGraphBuilder, (void *)&graph_builder);
+        if (FAILED(hr))
+        {
+            stream->format = old_format;
+            LeaveCriticalSection(&stream->cs);
+            return hr;
+        }
+        hr = CopyMediaType(&old_media_type, &stream->mt);
+        if (FAILED(hr))
+        {
+            stream->format = old_format;
+            IGraphBuilder_Release(graph_builder);
+            LeaveCriticalSection(&stream->cs);
+            return hr;
+        }
+        old_peer = stream->peer;
+        IPin_AddRef(old_peer);
+
+        IGraphBuilder_Disconnect(graph_builder, stream->peer);
+        IGraphBuilder_Disconnect(graph_builder, &stream->IPin_iface);
+        hr = IGraphBuilder_Connect(graph_builder, old_peer, &stream->IPin_iface);
+        if (FAILED(hr))
+        {
+            stream->format = old_format;
+            IGraphBuilder_ConnectDirect(graph_builder, old_peer, &stream->IPin_iface, &old_media_type);
+            IPin_Release(old_peer);
+            FreeMediaType(&old_media_type);
+            IGraphBuilder_Release(graph_builder);
+            LeaveCriticalSection(&stream->cs);
+            return DDERR_INVALIDSURFACETYPE;
+        }
+
+        IPin_Release(old_peer);
+        FreeMediaType(&old_media_type);
+        IGraphBuilder_Release(graph_builder);
+    }
 
     LeaveCriticalSection(&stream->cs);
 
