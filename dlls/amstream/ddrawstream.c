@@ -1379,6 +1379,23 @@ static HRESULT ddrawstreamsample_create(struct ddraw_stream *parent, IDirectDraw
         desc.ddsCaps.dwCaps = DDSCAPS_SYSTEMMEMORY|DDSCAPS_OFFSCREENPLAIN;
         desc.lpSurface = NULL;
 
+        if (parent->peer)
+        {
+            const VIDEOINFOHEADER *video_info = (const VIDEOINFOHEADER *)parent->mt.pbFormat;
+            desc.dwWidth = video_info->bmiHeader.biWidth;
+            desc.dwHeight = abs(video_info->bmiHeader.biHeight);
+        }
+        else
+        {
+            if (parent->format.dwFlags & DDSD_WIDTH)
+                desc.dwWidth = parent->format.dwWidth;
+            if (parent->format.dwFlags & DDSD_HEIGHT)
+                desc.dwWidth = parent->format.dwHeight;
+        }
+
+        if (parent->format.dwFlags & DDSD_PIXELFORMAT)
+            desc.ddpfPixelFormat = parent->format.ddpfPixelFormat;
+
         hr = IDirectDraw_CreateSurface(ddraw, &desc, &object->surface, NULL);
         IDirectDraw_Release(ddraw);
         if (FAILED(hr))
