@@ -1685,36 +1685,74 @@ static HRESULT ddrawstreamsample_create(struct ddraw_stream *parent, IDirectDraw
             return hr;
         }
 
+        desc = parent->format;
         desc.dwSize = sizeof(desc);
-        desc.dwFlags = DDSD_CAPS|DDSD_HEIGHT|DDSD_WIDTH|DDSD_PIXELFORMAT;
-        desc.dwHeight = 100;
-        desc.dwWidth = 100;
-        desc.ddpfPixelFormat.dwSize = sizeof(desc.ddpfPixelFormat);
-        desc.ddpfPixelFormat.dwFlags = DDPF_RGB;
-        desc.ddpfPixelFormat.u1.dwRGBBitCount = 32;
-        desc.ddpfPixelFormat.u2.dwRBitMask = 0xff0000;
-        desc.ddpfPixelFormat.u3.dwGBitMask = 0x00ff00;
-        desc.ddpfPixelFormat.u4.dwBBitMask = 0x0000ff;
-        desc.ddpfPixelFormat.u5.dwRGBAlphaBitMask = 0;
-        desc.ddsCaps.dwCaps = DDSCAPS_SYSTEMMEMORY|DDSCAPS_OFFSCREENPLAIN;
-        desc.lpSurface = NULL;
 
         if (parent->peer)
         {
             const VIDEOINFOHEADER *video_info = (const VIDEOINFOHEADER *)parent->mt.pbFormat;
-            desc.dwWidth = video_info->bmiHeader.biWidth;
-            desc.dwHeight = abs(video_info->bmiHeader.biHeight);
+            if (!(desc.dwFlags & DDSD_WIDTH))
+                desc.dwWidth = video_info->bmiHeader.biWidth;
+            if (!(desc.dwFlags & DDSD_HEIGHT))
+                desc.dwHeight = abs(video_info->bmiHeader.biHeight);
+            if (!(desc.dwFlags & DDSD_PIXELFORMAT))
+            {
+                desc.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+                desc.ddpfPixelFormat.dwFlags = DDPF_RGB;
+                if (IsEqualGUID(&parent->mt.subtype, &MEDIASUBTYPE_RGB8))
+                {
+                    desc.ddpfPixelFormat.dwFlags |= DDPF_PALETTEINDEXED8;
+                    desc.ddpfPixelFormat.u1.dwRGBBitCount = 8;
+                }
+                else if (IsEqualGUID(&parent->mt.subtype, &MEDIASUBTYPE_RGB555))
+                {
+                    desc.ddpfPixelFormat.u1.dwRGBBitCount = 16;
+                    desc.ddpfPixelFormat.u2.dwRBitMask = 0x7c00;
+                    desc.ddpfPixelFormat.u3.dwGBitMask = 0x03e0;
+                    desc.ddpfPixelFormat.u4.dwBBitMask = 0x001f;
+                }
+                else if (IsEqualGUID(&parent->mt.subtype, &MEDIASUBTYPE_RGB565))
+                {
+                    desc.ddpfPixelFormat.u1.dwRGBBitCount = 16;
+                    desc.ddpfPixelFormat.u2.dwRBitMask = 0xf800;
+                    desc.ddpfPixelFormat.u3.dwGBitMask = 0x07e0;
+                    desc.ddpfPixelFormat.u4.dwBBitMask = 0x001f;
+                }
+                else if (IsEqualGUID(&parent->mt.subtype, &MEDIASUBTYPE_RGB24))
+                {
+                    desc.ddpfPixelFormat.u1.dwRGBBitCount = 24;
+                    desc.ddpfPixelFormat.u2.dwRBitMask = 0xff0000;
+                    desc.ddpfPixelFormat.u3.dwGBitMask = 0x00ff00;
+                    desc.ddpfPixelFormat.u4.dwBBitMask = 0x0000ff;
+                }
+                else if (IsEqualGUID(&parent->mt.subtype, &MEDIASUBTYPE_RGB32))
+                {
+                    desc.ddpfPixelFormat.u1.dwRGBBitCount = 32;
+                    desc.ddpfPixelFormat.u2.dwRBitMask = 0xff0000;
+                    desc.ddpfPixelFormat.u3.dwGBitMask = 0x00ff00;
+                    desc.ddpfPixelFormat.u4.dwBBitMask = 0x0000ff;
+                }
+            }
         }
         else
         {
-            if (parent->format.dwFlags & DDSD_WIDTH)
-                desc.dwWidth = parent->format.dwWidth;
-            if (parent->format.dwFlags & DDSD_HEIGHT)
-                desc.dwWidth = parent->format.dwHeight;
+            if (!(desc.dwFlags & DDSD_WIDTH))
+                desc.dwWidth = 100;
+            if (!(desc.dwFlags & DDSD_HEIGHT))
+                desc.dwHeight = 100;
+            if (!(desc.dwFlags & DDSD_PIXELFORMAT))
+            {
+                desc.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+                desc.ddpfPixelFormat.dwFlags = DDPF_RGB;
+                desc.ddpfPixelFormat.u1.dwRGBBitCount = 32;
+                desc.ddpfPixelFormat.u2.dwRBitMask = 0xff0000;
+                desc.ddpfPixelFormat.u3.dwGBitMask = 0x00ff00;
+                desc.ddpfPixelFormat.u4.dwBBitMask = 0x0000ff;
+            }
         }
-
-        if (parent->format.dwFlags & DDSD_PIXELFORMAT)
-            desc.ddpfPixelFormat = parent->format.ddpfPixelFormat;
+        if (!(desc.dwFlags & DDSD_CAPS))
+            desc.ddsCaps.dwCaps = DDSCAPS_SYSTEMMEMORY | DDSCAPS_OFFSCREENPLAIN;
+        desc.dwFlags |= DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT;
 
         hr = IDirectDraw_CreateSurface(ddraw, &desc, &object->surface, NULL);
         IDirectDraw_Release(ddraw);
