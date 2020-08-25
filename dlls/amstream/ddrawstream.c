@@ -63,6 +63,9 @@ struct ddraw_stream
     REFERENCE_TIME segment_start;
     BOOL eos;
     BOOL flushing;
+    BOOL update_thread_done;
+    HANDLE receive_event;
+    HANDLE update_thread;
     struct list receive_queue;
     struct list update_queue;
 };
@@ -85,7 +88,7 @@ static void flush_receive_queue(struct ddraw_stream *stream)
         remove_queued_receive(LIST_ENTRY(entry, struct queued_receive, entry));
 }
 
-static void process_updates(struct ddraw_stream *stream);
+static DWORD CALLBACK update_thread_proc(void *param);
 
 static BOOL is_media_type_compatible(const AM_MEDIA_TYPE *media_type, const DDSURFACEDESC *format)
 {
@@ -188,6 +191,13 @@ static ULONG WINAPI ddraw_IAMMediaStream_Release(IAMMediaStream *iface)
 
     if (!ref)
     {
+        EnterCriticalSection(&stream->cs);
+        stream->update_thread_done = 1;
+        LeaveCriticalSection(&stream->cs);
+        SetEvent(stream->receive_event);
+        WaitForSingleObject(stream->update_thread, INFINITE);
+
+        CloseHandle(stream->update_thread);
         DeleteCriticalSection(&stream->cs);
         if (stream->ddraw)
             IDirectDraw_Release(stream->ddraw);
@@ -1062,7 +1072,7 @@ static HRESULT WINAPI ddraw_sink_EndOfStream(IPin *iface)
 
     stream->eos = TRUE;
 
-    process_updates(stream);
+    SetEvent(stream->receive_event);
 
     LeaveCriticalSection(&stream->cs);
 
@@ -1254,7 +1264,7 @@ static HRESULT WINAPI ddraw_meminput_Receive(IMemInputPin *iface, IMediaSample *
     IMediaSample_AddRef(receive->sample);
     list_add_tail(&stream->receive_queue, &receive->entry);
 
-    process_updates(stream);
+    SetEvent(stream->receive_event);
 
     LeaveCriticalSection(&stream->cs);
 
@@ -1308,6 +1318,9 @@ HRESULT ddraw_stream_create(IUnknown *outer, void **out)
     list_init(&object->receive_queue);
     list_init(&object->update_queue);
 
+    object->receive_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    object->update_thread = CreateThread(NULL, 0, update_thread_proc, object, 0, NULL);
+
     TRACE("Created ddraw stream %p.\n", object);
 
     *out = &object->IAMMediaStream_iface;
@@ -1360,8 +1373,6 @@ static void process_update(struct ddraw_sample *sample, struct queued_receive *r
 
     sample->start_time = receive->start_time;
     sample->end_time = receive->end_time;
-
-    sample->update_hr = S_OK;
 }
 
 static void process_updates(struct ddraw_stream *stream)
@@ -1370,11 +1381,27 @@ static void process_updates(struct ddraw_stream *stream)
     {
         struct ddraw_sample *sample = LIST_ENTRY(list_head(&stream->update_queue), struct ddraw_sample, entry);
         struct queued_receive *receive = LIST_ENTRY(list_head(&stream->receive_queue), struct queued_receive, entry);
+        struct ddraw_sample *sample2;
+        IMediaStreamFilter *filter;
+        STREAM_TIME start_time;
 
         process_update(sample, receive);
-
-        remove_queued_update(sample);
         remove_queued_receive(receive);
+
+        filter = stream->filter;
+        IMediaStreamFilter_AddRef(filter);
+        start_time = sample->start_time;
+        LeaveCriticalSection(&sample->parent->cs);
+        IMediaStreamFilter_WaitUntil(stream->filter, start_time);
+        EnterCriticalSection(&sample->parent->cs);
+        IMediaStreamFilter_Release(filter);
+
+        sample2 = LIST_ENTRY(list_head(&stream->update_queue), struct ddraw_sample, entry);
+        if (sample == sample2)
+        {
+            sample->update_hr = S_OK;
+            remove_queued_update(sample);
+        }
     }
     if (stream->eos)
     {
@@ -1386,6 +1413,28 @@ static void process_updates(struct ddraw_stream *stream)
             remove_queued_update(sample);
         }
     }
+}
+
+static DWORD CALLBACK update_thread_proc(void *param)
+{
+    struct ddraw_stream *stream = (struct ddraw_stream *)param;
+    for (;;)
+    {
+        EnterCriticalSection(&stream->cs);
+
+        if (stream->update_thread_done)
+        {
+            LeaveCriticalSection(&stream->cs);
+            break;
+        }
+
+        process_updates(stream);
+
+        LeaveCriticalSection(&stream->cs);
+
+        WaitForSingleObject(stream->receive_event, INFINITE);
+    }
+    return 0;
 }
 
 static inline struct ddraw_sample *impl_from_IDirectDrawStreamSample(IDirectDrawStreamSample *iface)
@@ -1553,7 +1602,7 @@ static HRESULT WINAPI ddraw_sample_Update(IDirectDrawStreamSample *iface,
     ResetEvent(sample->update_event);
     list_add_tail(&sample->parent->update_queue, &sample->entry);
 
-    process_updates(sample->parent);
+    SetEvent(sample->parent->receive_event);
     hr = sample->update_hr;
 
     LeaveCriticalSection(&sample->parent->cs);
@@ -1710,7 +1759,7 @@ static HRESULT ddrawstreamsample_create(struct ddraw_stream *parent, IDirectDraw
             if (parent->format.dwFlags & DDSD_WIDTH)
                 desc.dwWidth = parent->format.dwWidth;
             if (parent->format.dwFlags & DDSD_HEIGHT)
-                desc.dwWidth = parent->format.dwHeight;
+                desc.dwHeight = parent->format.dwHeight;
         }
 
         if (parent->format.dwFlags & DDSD_PIXELFORMAT)
