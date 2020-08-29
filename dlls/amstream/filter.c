@@ -650,11 +650,39 @@ static HRESULT WINAPI filter_GetCurrentStreamTime(IMediaStreamFilter *iface, REF
     return S_OK;
 }
 
-static HRESULT WINAPI filter_WaitUntil(IMediaStreamFilter *iface, REFERENCE_TIME WaitStreamTime)
+static HRESULT WINAPI filter_WaitUntil(IMediaStreamFilter *iface, REFERENCE_TIME time)
 {
-    FIXME("(%p)->(%s): Stub!\n", iface, wine_dbgstr_longlong(WaitStreamTime));
+    struct filter *filter = impl_from_IMediaStreamFilter(iface);
+    DWORD_PTR cookie;
+    HANDLE event;
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("filter %p, time %s.\n", iface, wine_dbgstr_longlong(time));
+
+    EnterCriticalSection(&filter->cs);
+
+    if (!filter->clock)
+    {
+        LeaveCriticalSection(&filter->cs);
+        return E_FAIL;
+    }
+
+    event = CreateEventW(NULL, FALSE, FALSE, NULL);
+
+    hr = IReferenceClock_AdviseTime(filter->clock, filter->start_time, time, (HEVENT)event, &cookie);
+    if (FAILED(hr))
+    {
+        LeaveCriticalSection(&filter->cs);
+        return hr;
+    }
+
+    LeaveCriticalSection(&filter->cs);
+
+    WaitForSingleObject(event, INFINITE);
+
+    CloseHandle(event);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI filter_Flush(IMediaStreamFilter *iface, BOOL bCancelEOS)
