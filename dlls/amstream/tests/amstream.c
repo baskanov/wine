@@ -7665,6 +7665,59 @@ static void test_ddrawstreamsample_completion_status(void)
     hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_RUN);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
+    hr = IDirectDrawStreamSample_Update(stream_sample1, SSUPDATE_ASYNC | SSUPDATE_CONTINUOUS, NULL, NULL, 0);
+    ok(hr == MS_S_PENDING, "Got hr %#x.\n", hr);
+
+    hr = IDirectDrawStreamSample_CompletionStatus(stream_sample1, COMPSTAT_NOUPDATEOK, 0);
+    ok(hr == MS_S_NOUPDATE, "Got hr %#x.\n", hr);
+
+    hr = IDirectDrawStreamSample_Update(stream_sample1, SSUPDATE_ASYNC | SSUPDATE_CONTINUOUS, NULL, NULL, 0);
+    ok(hr == MS_S_PENDING, "Got hr %#x.\n", hr);
+
+    hr = IDirectDrawStreamSample_Update(stream_sample2, SSUPDATE_ASYNC, NULL, NULL, 0);
+    ok(hr == MS_S_PENDING, "Got hr %#x.\n", hr);
+
+    hr = IDirectDrawStreamSample_CompletionStatus(stream_sample1, 0, 0);
+    ok(hr == MS_S_PENDING, "Got hr %#x.\n", hr);
+
+    media_sample = ammediastream_allocate_sample(&source, test_data, sizeof(test_data));
+    hr = IMemInputPin_Receive(source.source.pMemInputPin, media_sample);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ref = IMediaSample_Release(media_sample);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+
+    hr = IDirectDrawStreamSample_CompletionStatus(stream_sample1, 0, 0);
+    ok(hr == MS_S_PENDING, "Got hr %#x.\n", hr);
+
+    media_sample = ammediastream_allocate_sample(&source, test_data, sizeof(test_data));
+    hr = IMemInputPin_Receive(source.source.pMemInputPin, media_sample);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ref = IMediaSample_Release(media_sample);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+
+    hr = IDirectDrawStreamSample_CompletionStatus(stream_sample1, 0, 0);
+    ok(hr == MS_S_PENDING, "Got hr %#x.\n", hr);
+
+    hr = IDirectDrawStreamSample_CompletionStatus(stream_sample2, 0, 0);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IDirectDrawStreamSample_CompletionStatus(stream_sample1, COMPSTAT_NOUPDATEOK, 0);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IDirectDrawStreamSample_Update(stream_sample1, SSUPDATE_ASYNC | SSUPDATE_CONTINUOUS, NULL, NULL, 0);
+    ok(hr == MS_S_PENDING, "Got hr %#x.\n", hr);
+
+    hr = IPin_EndOfStream(pin);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IDirectDrawStreamSample_CompletionStatus(stream_sample1, 0, 0);
+    ok(hr == MS_S_ENDOFSTREAM, "Got hr %#x.\n", hr);
+
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_STOP);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_RUN);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
     hr = IDirectDrawStreamSample_Update(stream_sample1, SSUPDATE_ASYNC, NULL, NULL, 0);
     ok(hr == MS_S_PENDING, "Got hr %#x.\n", hr);
 
