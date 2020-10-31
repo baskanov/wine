@@ -2506,6 +2506,85 @@ static void test_set_state(void)
     ok(!ref, "Got outstanding refcount %d.\n", ref);
 }
 
+static void test_get_state(void)
+{
+    IAMMultiMediaStream *mmstream = create_ammultimediastream();
+    IMediaControl *media_control;
+    struct testfilter source;
+    IGraphBuilder *graph;
+    STREAM_STATE state;
+    HRESULT hr;
+    ULONG ref;
+
+    hr = IAMMultiMediaStream_Initialize(mmstream, STREAMTYPE_READ, 0, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IAMMultiMediaStream_AddMediaStream(mmstream, NULL, &MSPID_PrimaryAudio, 0, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IAMMultiMediaStream_GetFilterGraph(mmstream, &graph);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(graph != NULL, "Expected non-NULL graph.\n");
+    hr = IGraphBuilder_QueryInterface(graph, &IID_IMediaControl, (void **)&media_control);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    testfilter_init(&source);
+
+    hr = IGraphBuilder_AddFilter(graph, &source.filter.IBaseFilter_iface, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    /* Crashes on native. */
+    if (0)
+    {
+        hr = IAMMultiMediaStream_GetState(mmstream, NULL);
+        ok(hr == E_POINTER, "Got hr %#x.\n", hr);
+    }
+
+    state = 0xdeadbeef;
+    hr = IAMMultiMediaStream_GetState(mmstream, &state);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(state == STREAMSTATE_STOP, "Got state %#x.\n", state);
+
+    hr = IMediaControl_Run(media_control);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    state = 0xdeadbeef;
+    hr = IAMMultiMediaStream_GetState(mmstream, &state);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(state == STREAMSTATE_STOP, "Got state %#x.\n", state);
+
+    hr = IMediaControl_Stop(media_control);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_RUN);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    state = 0xdeadbeef;
+    hr = IAMMultiMediaStream_GetState(mmstream, &state);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(state == STREAMSTATE_RUN, "Got state %#x.\n", state);
+
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_STOP);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    state = 0xdeadbeef;
+    hr = IAMMultiMediaStream_GetState(mmstream, &state);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(state == STREAMSTATE_STOP, "Got state %#x.\n", state);
+
+    source.init_stream_hr = E_FAIL;
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_RUN);
+    ok(hr == E_FAIL, "Got hr %#x.\n", hr);
+
+    state = 0xdeadbeef;
+    hr = IAMMultiMediaStream_GetState(mmstream, &state);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(state == STREAMSTATE_STOP, "Got state %#x.\n", state);
+
+    ref = IAMMultiMediaStream_Release(mmstream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    IMediaControl_Release(media_control);
+    ref = IGraphBuilder_Release(graph);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+}
+
 static void test_enum_media_types(void)
 {
     IAMMultiMediaStream *mmstream = create_ammultimediastream();
@@ -8904,6 +8983,7 @@ START_TEST(amstream)
     test_pin_info();
     test_initialize();
     test_set_state();
+    test_get_state();
     test_enum_media_types();
     test_media_types();
 
