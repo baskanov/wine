@@ -2689,6 +2689,79 @@ static void test_get_state(void)
     ok(!ref, "Got outstanding refcount %d.\n", ref);
 }
 
+static void test_get_time(void)
+{
+    IAMMultiMediaStream *mmstream = create_ammultimediastream();
+    STREAM_TIME filter_start_time;
+    IMediaStreamFilter *filter;
+    IMediaFilter *media_filter;
+    struct testclock clock;
+    IGraphBuilder *graph;
+    STREAM_TIME time;
+    HRESULT hr;
+    ULONG ref;
+
+    hr = IAMMultiMediaStream_Initialize(mmstream, STREAMTYPE_READ, 0, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IAMMultiMediaStream_GetFilter(mmstream, &filter);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(!!filter, "Expected non-null filter.\n");
+    hr = IAMMultiMediaStream_AddMediaStream(mmstream, NULL, &MSPID_PrimaryAudio, 0, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IAMMultiMediaStream_GetFilterGraph(mmstream, &graph);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(graph != NULL, "Expected non-NULL graph.\n");
+    hr = IGraphBuilder_QueryInterface(graph, &IID_IMediaFilter, (void **)&media_filter);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    testclock_init(&clock);
+
+    /* Crashes on native. */
+    if (0)
+    {
+        hr = IAMMultiMediaStream_GetTime(mmstream, NULL);
+        ok(hr == E_POINTER, "Got hr %#x.\n", hr);
+    }
+
+    time = 0xdeadbeefdeadbeef;
+    hr = IAMMultiMediaStream_GetTime(mmstream, &time);
+    ok(hr == S_FALSE, "Got hr %#x.\n", hr);
+    ok(time == 0, "Got time %s.\n", wine_dbgstr_longlong(time));
+
+    hr = IMediaFilter_SetSyncSource(media_filter, &clock.IReferenceClock_iface);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    clock.get_time_hr = E_FAIL;
+
+    time = 0xdeadbeefdeadbeef;
+    hr = IAMMultiMediaStream_GetTime(mmstream, &time);
+    ok(hr == S_FALSE, "Got hr %#x.\n", hr);
+    ok(time == 0, "Got time %s.\n", wine_dbgstr_longlong(time));
+
+    clock.time = 23456789;
+    clock.get_time_hr = S_OK;
+
+    hr = IAMMultiMediaStream_SetState(mmstream, STREAMSTATE_RUN);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    hr = IMediaStreamFilter_GetCurrentStreamTime(filter, &filter_start_time);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    clock.time = 34567890;
+
+    time = 0xdeadbeefdeadbeef;
+    hr = IAMMultiMediaStream_GetTime(mmstream, &time);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(time == 11111101 + filter_start_time, "Got time %s.\n", wine_dbgstr_longlong(time));
+
+    ref = IAMMultiMediaStream_Release(mmstream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    IMediaFilter_Release(media_filter);
+    ref = IGraphBuilder_Release(graph);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IMediaStreamFilter_Release(filter);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+}
+
 static void test_enum_media_types(void)
 {
     IAMMultiMediaStream *mmstream = create_ammultimediastream();
@@ -8984,6 +9057,7 @@ START_TEST(amstream)
     test_initialize();
     test_set_state();
     test_get_state();
+    test_get_time();
     test_enum_media_types();
     test_media_types();
 
