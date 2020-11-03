@@ -1305,6 +1305,110 @@ static const IMediaSeekingVtbl testsource_seeking_vtbl =
     testsource_seeking_GetPreroll,
 };
 
+struct advise_time_cookie
+{
+    LONGLONG base;
+    LONGLONG offset;
+    HANDLE event;
+    HANDLE advise_time_called_event;
+    BOOL unadvise_called;
+};
+
+struct testclock
+{
+    IReferenceClock IReferenceClock_iface;
+    LONG refcount;
+    LONGLONG time;
+    struct advise_time_cookie *advise_time_cookie;
+    HRESULT get_time_hr;
+};
+
+static inline struct testclock *impl_from_IReferenceClock(IReferenceClock *iface)
+{
+    return CONTAINING_RECORD(iface, struct testclock, IReferenceClock_iface);
+}
+
+static HRESULT WINAPI testclock_QueryInterface(IReferenceClock *iface, REFIID iid, void **out)
+{
+    if (winetest_debug > 1) trace("QueryInterface(%s)\n", wine_dbgstr_guid(iid));
+    if (IsEqualGUID(iid, &IID_IReferenceClock)
+            || IsEqualGUID(iid, &IID_IUnknown))
+    {
+        *out = iface;
+        IReferenceClock_AddRef(iface);
+        return S_OK;
+    }
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI testclock_AddRef(IReferenceClock *iface)
+{
+    struct testclock *clock = impl_from_IReferenceClock(iface);
+    return InterlockedIncrement(&clock->refcount);
+}
+
+static ULONG WINAPI testclock_Release(IReferenceClock *iface)
+{
+    struct testclock *clock = impl_from_IReferenceClock(iface);
+    return InterlockedDecrement(&clock->refcount);
+}
+
+static HRESULT WINAPI testclock_GetTime(IReferenceClock *iface, REFERENCE_TIME *time)
+{
+    struct testclock *clock = impl_from_IReferenceClock(iface);
+    if (SUCCEEDED(clock->get_time_hr))
+        *time = clock->time;
+    return clock->get_time_hr;
+}
+
+static HRESULT WINAPI testclock_AdviseTime(IReferenceClock *iface, REFERENCE_TIME base, REFERENCE_TIME offset, HEVENT event, DWORD_PTR *cookie)
+{
+    struct testclock *clock = impl_from_IReferenceClock(iface);
+    if (clock->advise_time_cookie)
+    {
+        clock->advise_time_cookie->base = base;
+        clock->advise_time_cookie->offset = offset;
+        clock->advise_time_cookie->event = (HANDLE)event;
+        SetEvent(clock->advise_time_cookie->advise_time_called_event);
+    }
+    else
+    {
+        SetEvent((HANDLE)event);
+    }
+    *cookie = (DWORD_PTR)clock->advise_time_cookie;
+    return S_OK;
+}
+
+static HRESULT WINAPI testclock_AdvisePeriodic(IReferenceClock *iface, REFERENCE_TIME start, REFERENCE_TIME period, HSEMAPHORE semaphore, DWORD_PTR *cookie)
+{
+    ok(0, "Unexpected call.\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI testclock_Unadvise(IReferenceClock *iface, DWORD_PTR cookie)
+{
+    if (cookie)
+        ((struct advise_time_cookie *)cookie)->unadvise_called = TRUE;
+    return S_OK;
+}
+
+static IReferenceClockVtbl testclock_vtbl =
+{
+    testclock_QueryInterface,
+    testclock_AddRef,
+    testclock_Release,
+    testclock_GetTime,
+    testclock_AdviseTime,
+    testclock_AdvisePeriodic,
+    testclock_Unadvise,
+};
+
+static void testclock_init(struct testclock *clock)
+{
+    memset(clock, 0, sizeof(*clock));
+    clock->IReferenceClock_iface.lpVtbl = &testclock_vtbl;
+}
+
 #define check_get_stream(a,b,c,d) check_get_stream_(__LINE__,a,b,c,d)
 static void check_get_stream_(int line, IAMMultiMediaStream *mmstream,
         IMediaStreamFilter *filter, const GUID *mspid, IMediaStream *expect)
@@ -3146,110 +3250,6 @@ static void test_audiodata_set_format(void)
 
 out_unknown:
     IUnknown_Release(unknown);
-}
-
-struct advise_time_cookie
-{
-    LONGLONG base;
-    LONGLONG offset;
-    HANDLE event;
-    HANDLE advise_time_called_event;
-    BOOL unadvise_called;
-};
-
-struct testclock
-{
-    IReferenceClock IReferenceClock_iface;
-    LONG refcount;
-    LONGLONG time;
-    struct advise_time_cookie *advise_time_cookie;
-    HRESULT get_time_hr;
-};
-
-static inline struct testclock *impl_from_IReferenceClock(IReferenceClock *iface)
-{
-    return CONTAINING_RECORD(iface, struct testclock, IReferenceClock_iface);
-}
-
-static HRESULT WINAPI testclock_QueryInterface(IReferenceClock *iface, REFIID iid, void **out)
-{
-    if (winetest_debug > 1) trace("QueryInterface(%s)\n", wine_dbgstr_guid(iid));
-    if (IsEqualGUID(iid, &IID_IReferenceClock)
-            || IsEqualGUID(iid, &IID_IUnknown))
-    {
-        *out = iface;
-        IReferenceClock_AddRef(iface);
-        return S_OK;
-    }
-    return E_NOINTERFACE;
-}
-
-static ULONG WINAPI testclock_AddRef(IReferenceClock *iface)
-{
-    struct testclock *clock = impl_from_IReferenceClock(iface);
-    return InterlockedIncrement(&clock->refcount);
-}
-
-static ULONG WINAPI testclock_Release(IReferenceClock *iface)
-{
-    struct testclock *clock = impl_from_IReferenceClock(iface);
-    return InterlockedDecrement(&clock->refcount);
-}
-
-static HRESULT WINAPI testclock_GetTime(IReferenceClock *iface, REFERENCE_TIME *time)
-{
-    struct testclock *clock = impl_from_IReferenceClock(iface);
-    if (SUCCEEDED(clock->get_time_hr))
-        *time = clock->time;
-    return clock->get_time_hr;
-}
-
-static HRESULT WINAPI testclock_AdviseTime(IReferenceClock *iface, REFERENCE_TIME base, REFERENCE_TIME offset, HEVENT event, DWORD_PTR *cookie)
-{
-    struct testclock *clock = impl_from_IReferenceClock(iface);
-    if (clock->advise_time_cookie)
-    {
-        clock->advise_time_cookie->base = base;
-        clock->advise_time_cookie->offset = offset;
-        clock->advise_time_cookie->event = (HANDLE)event;
-        SetEvent(clock->advise_time_cookie->advise_time_called_event);
-    }
-    else
-    {
-        SetEvent((HANDLE)event);
-    }
-    *cookie = (DWORD_PTR)clock->advise_time_cookie;
-    return S_OK;
-}
-
-static HRESULT WINAPI testclock_AdvisePeriodic(IReferenceClock *iface, REFERENCE_TIME start, REFERENCE_TIME period, HSEMAPHORE semaphore, DWORD_PTR *cookie)
-{
-    ok(0, "Unexpected call.\n");
-    return E_NOTIMPL;
-}
-
-static HRESULT WINAPI testclock_Unadvise(IReferenceClock *iface, DWORD_PTR cookie)
-{
-    if (cookie)
-        ((struct advise_time_cookie *)cookie)->unadvise_called = TRUE;
-    return S_OK;
-}
-
-static IReferenceClockVtbl testclock_vtbl =
-{
-    testclock_QueryInterface,
-    testclock_AddRef,
-    testclock_Release,
-    testclock_GetTime,
-    testclock_AdviseTime,
-    testclock_AdvisePeriodic,
-    testclock_Unadvise,
-};
-
-static void testclock_init(struct testclock *clock)
-{
-    memset(clock, 0, sizeof(*clock));
-    clock->IReferenceClock_iface.lpVtbl = &testclock_vtbl;
 }
 
 static void test_audiostream_get_format(void)
