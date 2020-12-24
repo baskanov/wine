@@ -81,6 +81,7 @@ struct gstdemux_source
     HANDLE caps_event, eos_event;
     GstSegment *segment;
     SourceSeeking seek;
+    DWORD bytes_per_second;
 };
 
 static inline struct gstdemux *impl_from_strmbase_filter(struct strmbase_filter *iface)
@@ -801,6 +802,7 @@ static GstFlowReturn got_data_sink(GstPad *pad, GstObject *parent, GstBuffer *bu
     BYTE *ptr = NULL;
     IMediaSample *sample;
     GstMapInfo info;
+    gsize position = 0;
 
     TRACE("%p %p\n", pad, buf);
 
@@ -809,76 +811,108 @@ static GstFlowReturn got_data_sink(GstPad *pad, GstObject *parent, GstBuffer *bu
         return GST_FLOW_OK;
     }
 
-    hr = BaseOutputPinImpl_GetDeliveryBuffer(&pin->pin, &sample, NULL, NULL, 0);
-
-    if (hr == VFW_E_NOT_CONNECTED) {
-        gst_buffer_unref(buf);
-        return GST_FLOW_NOT_LINKED;
-    }
-
-    if (FAILED(hr)) {
-        gst_buffer_unref(buf);
-        ERR("Could not get a delivery buffer (%x), returning GST_FLOW_FLUSHING\n", hr);
-        return GST_FLOW_FLUSHING;
-    }
-
     gst_buffer_map(buf, &info, GST_MAP_READ);
 
-    hr = IMediaSample_SetActualDataLength(sample, info.size);
-    if(FAILED(hr)){
-        WARN("SetActualDataLength failed: %08x\n", hr);
-        return GST_FLOW_FLUSHING;
-    }
+    while (position < info.size)
+    {
+        gsize advance;
 
-    IMediaSample_GetPointer(sample, &ptr);
+        hr = BaseOutputPinImpl_GetDeliveryBuffer(&pin->pin, &sample, NULL, NULL, 0);
 
-    memcpy(ptr, info.data, info.size);
+        if (hr == VFW_E_NOT_CONNECTED) {
+            gst_buffer_unmap(buf, &info);
+            gst_buffer_unref(buf);
+            return GST_FLOW_NOT_LINKED;
+        }
 
-    gst_buffer_unmap(buf, &info);
+        if (FAILED(hr)) {
+            gst_buffer_unmap(buf, &info);
+            gst_buffer_unref(buf);
+            ERR("Could not get a delivery buffer (%x), returning GST_FLOW_FLUSHING\n", hr);
+            return GST_FLOW_FLUSHING;
+        }
 
-    if (GST_BUFFER_PTS_IS_VALID(buf)) {
-        REFERENCE_TIME rtStart = gst_segment_to_running_time(pin->segment, GST_FORMAT_TIME, buf->pts);
-        if (rtStart >= 0)
-            rtStart /= 100;
+        advance = min(IMediaSample_GetSize(sample), info.size - position);
 
-        if (GST_BUFFER_DURATION_IS_VALID(buf)) {
-            REFERENCE_TIME tStart = buf->pts / 100;
-            REFERENCE_TIME tStop = (buf->pts + buf->duration) / 100;
-            REFERENCE_TIME rtStop;
-            rtStop = gst_segment_to_running_time(pin->segment, GST_FORMAT_TIME, buf->pts + buf->duration);
-            if (rtStop >= 0)
-                rtStop /= 100;
-            TRACE("Current time on %p: %i to %i ms\n", pin, (int)(rtStart / 10000), (int)(rtStop / 10000));
-            IMediaSample_SetTime(sample, &rtStart, rtStop >= 0 ? &rtStop : NULL);
-            IMediaSample_SetMediaTime(sample, &tStart, &tStop);
+        hr = IMediaSample_SetActualDataLength(sample, advance);
+        if(FAILED(hr)){
+            gst_buffer_unmap(buf, &info);
+            gst_buffer_unref(buf);
+            WARN("SetActualDataLength failed: %08x\n", hr);
+            return GST_FLOW_FLUSHING;
+        }
+
+        IMediaSample_GetPointer(sample, &ptr);
+
+        memcpy(ptr, &info.data[position], advance);
+
+        if (GST_BUFFER_PTS_IS_VALID(buf)) {
+            REFERENCE_TIME rtStart;
+            GstClockTime ptsStart = buf->pts;
+            if (position > 0 && pin->bytes_per_second)
+                ptsStart = buf->pts + gst_util_uint64_scale(position, GST_SECOND, pin->bytes_per_second);
+            rtStart = gst_segment_to_running_time(pin->segment, GST_FORMAT_TIME, ptsStart);
+            if (rtStart >= 0)
+                rtStart /= 100;
+
+            if (GST_BUFFER_DURATION_IS_VALID(buf)) {
+                REFERENCE_TIME rtStop;
+                REFERENCE_TIME tStart;
+                REFERENCE_TIME tStop;
+                GstClockTime ptsStop = buf->pts + buf->duration;
+                if (position + advance < info.size && pin->bytes_per_second)
+                    ptsStop = buf->pts + gst_util_uint64_scale(position + advance, GST_SECOND, pin->bytes_per_second);
+                tStart = ptsStart / 100;
+                tStop = ptsStop / 100;
+                rtStop = gst_segment_to_running_time(pin->segment, GST_FORMAT_TIME, ptsStop);
+                if (rtStop >= 0)
+                    rtStop /= 100;
+                TRACE("Current time on %p: %i to %i ms\n", pin, (int)(rtStart / 10000), (int)(rtStop / 10000));
+                IMediaSample_SetTime(sample, &rtStart, rtStop >= 0 ? &rtStop : NULL);
+                IMediaSample_SetMediaTime(sample, &tStart, &tStop);
+            } else {
+                IMediaSample_SetTime(sample, rtStart >= 0 ? &rtStart : NULL, NULL);
+                IMediaSample_SetMediaTime(sample, NULL, NULL);
+            }
         } else {
-            IMediaSample_SetTime(sample, rtStart >= 0 ? &rtStart : NULL, NULL);
+            IMediaSample_SetTime(sample, NULL, NULL);
             IMediaSample_SetMediaTime(sample, NULL, NULL);
         }
-    } else {
-        IMediaSample_SetTime(sample, NULL, NULL);
-        IMediaSample_SetMediaTime(sample, NULL, NULL);
+
+        IMediaSample_SetDiscontinuity(sample,
+                !position && GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DISCONT));
+        IMediaSample_SetPreroll(sample, GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_LIVE));
+        IMediaSample_SetSyncPoint(sample,
+                !position && !GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DELTA_UNIT));
+
+        if (!pin->pin.pin.peer)
+            hr = VFW_E_NOT_CONNECTED;
+        else
+            hr = IMemInputPin_Receive(pin->pin.pMemInputPin, sample);
+
+        TRACE("sending sample returned: %08x\n", hr);
+
+        IMediaSample_Release(sample);
+
+        if (hr == VFW_E_NOT_CONNECTED)
+        {
+            gst_buffer_unmap(buf, &info);
+            gst_buffer_unref(buf);
+            return GST_FLOW_NOT_LINKED;
+        }
+
+        if (FAILED(hr))
+        {
+            gst_buffer_unmap(buf, &info);
+            gst_buffer_unref(buf);
+            return GST_FLOW_FLUSHING;
+        }
+
+        position += advance;
     }
 
-    IMediaSample_SetDiscontinuity(sample, GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DISCONT));
-    IMediaSample_SetPreroll(sample, GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_LIVE));
-    IMediaSample_SetSyncPoint(sample, !GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DELTA_UNIT));
-
-    if (!pin->pin.pin.peer)
-        hr = VFW_E_NOT_CONNECTED;
-    else
-        hr = IMemInputPin_Receive(pin->pin.pMemInputPin, sample);
-
-    TRACE("sending sample returned: %08x\n", hr);
-
+    gst_buffer_unmap(buf, &info);
     gst_buffer_unref(buf);
-    IMediaSample_Release(sample);
-
-    if (hr == VFW_E_NOT_CONNECTED)
-        return GST_FLOW_NOT_LINKED;
-
-    if (FAILED(hr))
-        return GST_FLOW_FLUSHING;
 
     return GST_FLOW_OK;
 }
@@ -2104,6 +2138,8 @@ static HRESULT WINAPI GSTOutPin_DecideBufferSize(struct strmbase_source *iface,
     {
         WAVEFORMATEX *format = (WAVEFORMATEX *)pin->pin.pin.mt.pbFormat;
         buffer_size = format->nAvgBytesPerSec;
+
+        pin->bytes_per_second = format->nAvgBytesPerSec;
     }
 
     props->cBuffers = max(props->cBuffers, 1);
