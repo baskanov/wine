@@ -142,6 +142,17 @@ static BOOL EventsQueue_GetEvent(EventsQueue* omr, Event* evt, LONG msTimeOut)
     return TRUE;
 }
 
+static void EventsQueue_Clear(EventsQueue* omr)
+{
+    EnterCriticalSection(&omr->msg_crst);
+
+    omr->msg_toget = 0;
+    omr->msg_tosave = 0;
+    ResetEvent(omr->msg_event);
+
+    LeaveCriticalSection(&omr->msg_crst);
+}
+
 #define MAX_ITF_CACHE_ENTRIES 3
 typedef struct _ITF_CACHE_ENTRY {
    const IID* riid;
@@ -4889,6 +4900,9 @@ static HRESULT WINAPI MediaEvent_SetNotifyFlags(IMediaEventEx *iface, LONG lNoNo
 	return E_INVALIDARG;
 
     This->notif.disabled = lNoNotifyFlags;
+
+    if (lNoNotifyFlags)
+        EventsQueue_Clear(&This->evqueue);
 
     return S_OK;
 }
