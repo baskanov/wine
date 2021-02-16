@@ -127,6 +127,7 @@ static BOOL EventsQueue_GetEvent(EventsQueue* omr, Event* evt, LONG msTimeOut)
 
     if (omr->msg_toget == omr->msg_tosave) /* buffer empty ? */
     {
+        ResetEvent(omr->msg_event);
         LeaveCriticalSection(&omr->msg_crst);
 	return FALSE;
     }
