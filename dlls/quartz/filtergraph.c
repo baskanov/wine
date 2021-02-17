@@ -154,6 +154,32 @@ static void EventsQueue_Clear(EventsQueue* omr)
     LeaveCriticalSection(&omr->msg_crst);
 }
 
+static void EventsQueue_RemoveEvent(EventsQueue* omr, LONG code)
+{
+    int write_pos;
+    int read_pos;
+
+    EnterCriticalSection(&omr->msg_crst);
+
+    write_pos = omr->msg_toget;
+    read_pos = omr->msg_toget;
+    while (read_pos != omr->msg_tosave)
+    {
+        if (omr->messages[read_pos].lEventCode != code)
+        {
+            omr->messages[write_pos] = omr->messages[read_pos];
+            write_pos = (write_pos + 1 < omr->ring_buffer_size) ? write_pos + 1 : 0;
+        }
+        read_pos = (read_pos + 1 < omr->ring_buffer_size) ? read_pos + 1 : 0;
+    }
+    omr->msg_tosave = write_pos;
+
+    if (omr->msg_toget == omr->msg_tosave)
+        ResetEvent(omr->msg_event);
+
+    LeaveCriticalSection(&omr->msg_crst);
+}
+
 #define MAX_ITF_CACHE_ENTRIES 3
 typedef struct _ITF_CACHE_ENTRY {
    const IID* riid;
@@ -1759,6 +1785,8 @@ static HRESULT graph_start(struct filter_graph *graph, REFERENCE_TIME stream_sta
 
     graph->EcCompleteCount = 0;
     update_render_count(graph);
+
+    EventsQueue_RemoveEvent(&graph->evqueue, EC_COMPLETE);
 
     if (graph->defaultclock && !graph->refClock)
         IFilterGraph2_SetDefaultSyncSource(&graph->IFilterGraph2_iface);

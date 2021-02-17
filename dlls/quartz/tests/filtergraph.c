@@ -5233,7 +5233,7 @@ static void test_set_notify_flags(void)
     hr = IMediaControl_Run(media_control);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
-    todo_wine ok(WaitForSingleObject(event, 0) == WAIT_TIMEOUT, "Event should not be signaled.\n");
+    ok(WaitForSingleObject(event, 0) == WAIT_TIMEOUT, "Event should not be signaled.\n");
 
     hr = IMediaEventSink_Notify(media_event_sink, EC_COMPLETE, S_OK,
             (LONG_PTR)&filter.IBaseFilter_iface);
@@ -5277,9 +5277,9 @@ static void test_set_notify_flags(void)
     DestroyWindow(window);
 }
 
-#define check_events(a, b, c, d) check_events_(__LINE__, a, b, c, d)
+#define check_events(a, b, c) check_events_(__LINE__, a, b, c)
 static void check_events_(unsigned int line, IMediaEventEx *media_event,
-        int expected_ec_complete_count, int expected_ec_status_count, BOOL todo)
+        int expected_ec_complete_count, int expected_ec_status_count)
 {
     int ec_complete_count = 0;
     int ec_status_count = 0;
@@ -5297,7 +5297,7 @@ static void check_events_(unsigned int line, IMediaEventEx *media_event,
             ++ec_status_count;
     }
     ok(hr == E_ABORT, "Got hr %#x.\n", hr);
-    todo_wine_if(todo) ok_(__FILE__, line)(ec_complete_count == expected_ec_complete_count,
+    ok_(__FILE__, line)(ec_complete_count == expected_ec_complete_count,
         "Expected %d EC_COMPLETE events.\n", expected_ec_complete_count);
     ok_(__FILE__, line)(ec_status_count == expected_ec_status_count,
         "Expected %d EC_STATUS events.\n", expected_ec_status_count);
@@ -5350,7 +5350,7 @@ static void test_events(void)
     hr = IMediaControl_Stop(media_control);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
-    check_events(media_event, 1, 2, FALSE);
+    check_events(media_event, 1, 2);
 
     hr = IMediaControl_Run(media_control);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
@@ -5368,7 +5368,7 @@ static void test_events(void)
     hr = IMediaControl_Run(media_control);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
-    check_events(media_event, 0, 2, TRUE);
+    check_events(media_event, 0, 2);
 
     hr = IMediaEventSink_Notify(media_event_sink, EC_STATUS, (LONG_PTR)status, (LONG_PTR)status);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
@@ -5383,7 +5383,7 @@ static void test_events(void)
     hr = IMediaControl_Pause(media_control);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
-    check_events(media_event, 1, 2, FALSE);
+    check_events(media_event, 1, 2);
 
     SetEvent(event);
 
