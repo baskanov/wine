@@ -290,10 +290,14 @@ static HRESULT renderer_cleanup_stream(struct strmbase_filter *iface)
 static HRESULT renderer_wait_state(struct strmbase_filter *iface, DWORD timeout)
 {
     struct strmbase_renderer *filter = impl_from_strmbase_filter(iface);
+    HRESULT hr = S_OK;
 
+    LeaveCriticalSection(&filter->filter.filter_cs);
     if (WaitForSingleObject(filter->state_event, timeout) == WAIT_TIMEOUT)
-        return VFW_S_STATE_INTERMEDIATE;
-    return S_OK;
+        hr = VFW_S_STATE_INTERMEDIATE;
+    EnterCriticalSection(&filter->filter.filter_cs);
+
+    return hr;
 }
 
 static const struct strmbase_filter_ops filter_ops =
