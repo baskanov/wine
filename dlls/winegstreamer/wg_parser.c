@@ -1804,15 +1804,6 @@ static BOOL mpeg_audio_parser_init_gst(struct wg_parser *parser)
         return FALSE;
     }
 
-    pthread_mutex_lock(&parser->mutex);
-    while (!parser->has_duration && !parser->error && !stream->eos)
-        pthread_cond_wait(&parser->init_cond, &parser->mutex);
-    if (parser->error)
-    {
-        pthread_mutex_unlock(&parser->mutex);
-        return FALSE;
-    }
-    pthread_mutex_unlock(&parser->mutex);
     return TRUE;
 }
 
