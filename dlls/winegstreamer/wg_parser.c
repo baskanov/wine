@@ -1536,37 +1536,46 @@ static HRESULT CDECL wg_parser_connect(struct wg_parser *parser, uint64_t file_s
 
         while (!stream->has_caps && !parser->error)
             pthread_cond_wait(&parser->init_cond, &parser->mutex);
-        if (parser->error)
+        /* For some GStreamer elements we have to wait for duration-changed
+         * before querying for duration. However, elements that provide
+         * duration immediatly don't sent this message, so try to query first
+         * and then wait if the query fails. */
+        for (;;)
         {
-            pthread_mutex_unlock(&parser->mutex);
-            return E_FAIL;
-        }
-        /* GStreamer doesn't actually provide any guarantees about when duration
-         * is available, even for seekable streams. However, many elements (e.g.
-         * avidemux, wavparse, qtdemux) in practice record duration before
-         * fixing caps, so as a heuristic, wait until we get caps before trying
-         * to query for duration. */
-        if (gst_pad_query_duration(stream->their_src, GST_FORMAT_TIME, &duration))
-        {
-            stream->duration = duration / 100;
-        }
-        else
-        {
-            WARN("Failed to query time duration; trying to convert from byte length.\n");
-
-            /* To accurately get a duration for the stream, we want to only consider the
-             * length of that stream. Hence, query for the pad duration, instead of
-             * using the file duration. */
-            if (gst_pad_query_duration(stream->their_src, GST_FORMAT_BYTES, &byte_length)
-                    && gst_pad_query_convert(stream->their_src, GST_FORMAT_BYTES, byte_length,
-                            GST_FORMAT_TIME, &duration))
+            if (parser->error)
+            {
+                pthread_mutex_unlock(&parser->mutex);
+                return E_FAIL;
+            }
+            if (gst_pad_query_duration(stream->their_src, GST_FORMAT_TIME, &duration))
             {
                 stream->duration = duration / 100;
+                break;
             }
-            else
+            /* GStreamer versions before 1.5.90 fail to compute the duration of
+             * short MP3 files without Xing or VBRI headers, but it's still
+             * possible to get an estimated duration by converting from byte
+             * length. See <gstreamer.git:6d78d32d51970003d7>. */
+            if (stream->eos)
             {
-                ERR("Failed to query duration.\n");
+                WARN("Failed to query time duration; trying to convert from byte length.\n");
+
+                /* To accurately get a duration for the stream, we want to only consider the
+                 * length of that stream. Hence, query for the pad duration, instead of
+                 * using the file duration. */
+                if (gst_pad_query_duration(stream->their_src, GST_FORMAT_BYTES, &byte_length)
+                        && gst_pad_query_convert(stream->their_src, GST_FORMAT_BYTES, byte_length,
+                                GST_FORMAT_TIME, &duration))
+                {
+                    stream->duration = duration / 100;
+                }
+                else
+                {
+                    ERR("Failed to query duration.\n");
+                }
+                break;
             }
+            pthread_cond_wait(&parser->init_cond, &parser->mutex);
         }
     }
 
