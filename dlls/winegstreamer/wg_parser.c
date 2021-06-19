@@ -1575,7 +1575,21 @@ static HRESULT CDECL wg_parser_connect(struct wg_parser *parser, uint64_t file_s
                 }
                 break;
             }
-            pthread_cond_wait(&parser->init_cond, &parser->mutex);
+            /* Elements based on GstBaseParse send duration-changed before
+             * actually updating the duration in GStreamer versions prior
+             * to 1.17.1. See <gstreamer.git:d28e0b4147fe7073b2>. So after
+             * receiving duration-changed we have to continue polling until
+             * the query succeeds. */
+            if (parser->has_duration)
+            {
+                pthread_mutex_unlock(&parser->mutex);
+                g_usleep(10000);
+                pthread_mutex_lock(&parser->mutex);
+            }
+            else
+            {
+                pthread_cond_wait(&parser->init_cond, &parser->mutex);
+            }
         }
     }
 
